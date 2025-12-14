@@ -59,3 +59,6 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db
+
+# Local document storage (test files)
+storage/

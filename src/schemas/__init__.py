@@ -15,6 +15,39 @@ from src.schemas.module import (
     ModuleAccessRequestResponse,
     ClientModuleResponse,
 )
+from src.schemas.client_auth import (
+    ClientLoginRequest,
+    ClientRegisterRequest,
+    ClientTokenResponse,
+    ClientRefreshRequest,
+    ClientUserProfile,
+    MessageResponse,
+)
+from src.schemas.client_portfolio import (
+    PortfolioSummary,
+    ClientAccountSummary,
+    ClientAccountList,
+    ClientAccountDetail,
+    ClientHolding,
+    ClientHoldingsList,
+    ClientTransaction,
+    ClientTransactionList,
+    AllocationItem,
+    AllocationBreakdown,
+    PerformanceMetrics,
+    PortfolioPerformance,
+)
+from src.schemas.product import (
+    RiskLevel,
+    ProductCategoryCreate,
+    ProductCategoryUpdate,
+    ProductCategoryResponse,
+    ProductCreate,
+    ProductUpdate,
+    ProductResponse,
+    ProductVisibilityUpdate,
+    ProductSummaryResponse,
+)
 
 __all__ = [
     "PaginationParams",
@@ -38,5 +71,35 @@ __all__ = [
     "ModuleAccessRequest",
     "ModuleAccessRequestResponse",
     "ClientModuleResponse",
+    # Client auth
+    "ClientLoginRequest",
+    "ClientRegisterRequest",
+    "ClientTokenResponse",
+    "ClientRefreshRequest",
+    "ClientUserProfile",
+    "MessageResponse",
+    # Client portfolio
+    "PortfolioSummary",
+    "ClientAccountSummary",
+    "ClientAccountList",
+    "ClientAccountDetail",
+    "ClientHolding",
+    "ClientHoldingsList",
+    "ClientTransaction",
+    "ClientTransactionList",
+    "AllocationItem",
+    "AllocationBreakdown",
+    "PerformanceMetrics",
+    "PortfolioPerformance",
+    # Product schemas
+    "RiskLevel",
+    "ProductCategoryCreate",
+    "ProductCategoryUpdate",
+    "ProductCategoryResponse",
+    "ProductCreate",
+    "ProductUpdate",
+    "ProductResponse",
+    "ProductVisibilityUpdate",
+    "ProductSummaryResponse",
 ]
 

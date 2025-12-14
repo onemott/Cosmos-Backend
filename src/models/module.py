@@ -13,6 +13,7 @@ from src.db.base import Base, TimestampMixin
 if TYPE_CHECKING:
     from src.models.tenant import Tenant
     from src.models.client import Client
+    from src.models.product import Product
 
 
 class ModuleCategory(str, enum.Enum):
@@ -58,6 +59,9 @@ class Module(Base, TimestampMixin):
     )
     client_modules: Mapped[list["ClientModule"]] = relationship(
         "ClientModule", back_populates="module", cascade="all, delete-orphan"
+    )
+    products: Mapped[list["Product"]] = relationship(
+        "Product", back_populates="module", cascade="all, delete-orphan"
     )
 
 

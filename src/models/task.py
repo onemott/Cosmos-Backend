@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Optional
 from uuid import uuid4
 from datetime import datetime
 
-from sqlalchemy import String, ForeignKey, Enum as SQLEnum, DateTime, JSON
+from sqlalchemy import String, ForeignKey, Enum as SQLEnum, DateTime, JSON, Boolean
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 import enum
@@ -22,6 +22,7 @@ class TaskType(str, enum.Enum):
     KYC_REVIEW = "kyc_review"
     DOCUMENT_REVIEW = "document_review"
     PROPOSAL_APPROVAL = "proposal_approval"
+    PRODUCT_REQUEST = "product_request"  # Client-initiated investment product request
     COMPLIANCE_CHECK = "compliance_check"
     RISK_REVIEW = "risk_review"
     ACCOUNT_OPENING = "account_opening"
@@ -36,6 +37,24 @@ class TaskStatus(str, enum.Enum):
     COMPLETED = "completed"
     CANCELLED = "cancelled"
     ON_HOLD = "on_hold"
+
+
+class WorkflowState(str, enum.Enum):
+    """Workflow state for client approval tasks."""
+
+    DRAFT = "draft"  # Task created, not yet sent to client
+    PENDING_EAM = "pending_eam"  # Client-initiated, awaiting EAM review
+    PENDING_CLIENT = "pending_client"  # Awaiting client action
+    APPROVED = "approved"  # Client approved
+    DECLINED = "declined"  # Client declined
+    EXPIRED = "expired"  # Deadline passed without action
+
+
+class ApprovalAction(str, enum.Enum):
+    """Client approval action."""
+
+    APPROVED = "approved"
+    DECLINED = "declined"
 
 
 class TaskPriority(str, enum.Enum):
@@ -86,11 +105,31 @@ class Task(Base, TimestampMixin):
     )
 
     # Dates
-    due_date: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    due_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # Additional data
     extra_data: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    is_archived: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    # Workflow fields for client approval
+    workflow_state: Mapped[Optional[WorkflowState]] = mapped_column(
+        SQLEnum(WorkflowState), nullable=True
+    )
+    approval_required_by: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    approved_by_client_user_id: Mapped[Optional[str]] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("client_users.id"), nullable=True
+    )
+    approval_action: Mapped[Optional[ApprovalAction]] = mapped_column(
+        SQLEnum(ApprovalAction), nullable=True
+    )
+    approval_comment: Mapped[Optional[str]] = mapped_column(String(2000), nullable=True)
+    approval_acted_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    proposal_data: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 
     # Relationships
     client: Mapped[Optional["Client"]] = relationship("Client", back_populates="tasks")

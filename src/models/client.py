@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from src.models.document import Document
     from src.models.task import Task
     from src.models.module import ClientModule
+    from src.models.client_user import ClientUser
 
 
 class ClientType(str, enum.Enum):
@@ -119,6 +120,9 @@ class Client(Base, TimestampMixin):
     tasks: Mapped[list["Task"]] = relationship("Task", back_populates="client")
     modules: Mapped[list["ClientModule"]] = relationship(
         "ClientModule", back_populates="client", cascade="all, delete-orphan"
+    )
+    client_user: Mapped[Optional["ClientUser"]] = relationship(
+        "ClientUser", back_populates="client", uselist=False
     )
 
     @property

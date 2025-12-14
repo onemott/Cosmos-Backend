@@ -26,6 +26,9 @@ class TokenPayload(BaseModel):
     roles: list[str]
     exp: datetime
     iat: datetime
+    # Optional fields for client tokens
+    user_type: Optional[str] = None  # "staff" or "client"
+    client_id: Optional[str] = None  # Only for client tokens
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -69,6 +72,48 @@ def create_refresh_token(subject: str, tenant_id: str) -> str:
     to_encode: dict[str, Any] = {
         "sub": subject,
         "tenant_id": tenant_id,
+        "type": "refresh",
+        "exp": expire,
+        "iat": now,
+    }
+    return jwt.encode(to_encode, settings.secret_key, algorithm=ALGORITHM)
+
+
+def create_client_access_token(
+    client_user_id: str,
+    client_id: str,
+    tenant_id: str,
+    expires_delta: Optional[timedelta] = None,
+) -> str:
+    """Create a JWT access token for client users."""
+    now = datetime.now(timezone.utc)
+    if expires_delta:
+        expire = now + expires_delta
+    else:
+        expire = now + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+
+    to_encode: dict[str, Any] = {
+        "sub": client_user_id,
+        "tenant_id": tenant_id,
+        "client_id": client_id,
+        "user_type": "client",
+        "roles": ["client"],
+        "exp": expire,
+        "iat": now,
+    }
+    return jwt.encode(to_encode, settings.secret_key, algorithm=ALGORITHM)
+
+
+def create_client_refresh_token(client_user_id: str, client_id: str, tenant_id: str) -> str:
+    """Create a JWT refresh token for client users."""
+    now = datetime.now(timezone.utc)
+    expire = now + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
+
+    to_encode: dict[str, Any] = {
+        "sub": client_user_id,
+        "tenant_id": tenant_id,
+        "client_id": client_id,
+        "user_type": "client",
         "type": "refresh",
         "exp": expire,
         "iat": now,

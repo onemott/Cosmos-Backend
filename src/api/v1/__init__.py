@@ -4,9 +4,12 @@ from fastapi import APIRouter
 
 from src.api.v1 import auth, tenants, users, clients, accounts, holdings, transactions
 from src.api.v1 import documents, tasks, modules, reports, stats, roles
+from src.api.v1 import categories, products
+from src.api.v1 import client_auth, client_portfolio, client_documents, client_tasks, client_products
 
 router = APIRouter()
 
+# Admin/Staff APIs
 router.include_router(auth.router, prefix="/auth", tags=["Authentication"])
 router.include_router(tenants.router, prefix="/tenants", tags=["Tenants"])
 router.include_router(users.router, prefix="/users", tags=["Users"])
@@ -18,6 +21,15 @@ router.include_router(transactions.router, prefix="/transactions", tags=["Transa
 router.include_router(documents.router, prefix="/documents", tags=["Documents"])
 router.include_router(tasks.router, prefix="/tasks", tags=["Tasks"])
 router.include_router(modules.router, prefix="/modules", tags=["Modules"])
+router.include_router(categories.router, prefix="/categories", tags=["Categories"])
+router.include_router(products.router, prefix="/products", tags=["Products"])
 router.include_router(reports.router, prefix="/reports", tags=["Reports"])
 router.include_router(stats.router, prefix="/stats", tags=["Statistics"])
+
+# Client-Facing APIs (prefix already included in router)
+router.include_router(client_auth.router)
+router.include_router(client_portfolio.router)
+router.include_router(client_documents.router)
+router.include_router(client_tasks.router)
+router.include_router(client_products.router)
 

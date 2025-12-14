@@ -7,7 +7,12 @@ from sqlalchemy import select, and_
 from sqlalchemy.orm import selectinload
 
 from src.db.session import get_db
-from src.api.deps import get_current_user, get_current_superuser, get_platform_user, get_current_tenant_admin
+from src.api.deps import (
+    get_current_user,
+    get_current_superuser,
+    get_platform_user,
+    get_current_tenant_admin,
+)
 from src.models.module import Module, TenantModule, ModuleCategory
 from src.models.tenant import Tenant
 from src.schemas.module import (
@@ -26,13 +31,14 @@ router = APIRouter()
 # Module Listing Endpoints
 # ============================================================================
 
+
 @router.get("/", response_model=List[TenantModuleResponse])
 async def list_my_tenant_modules(
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ) -> List[TenantModuleResponse]:
     """List available modules for current user's tenant with enabled status.
-    
+
     For each module:
     - Core modules (is_core=True) are always enabled
     - Non-core modules are enabled only if there's a TenantModule record with is_enabled=True
@@ -43,40 +49,46 @@ async def list_my_tenant_modules(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="User must belong to a tenant",
         )
-    
+
     # Get all active modules with their tenant-specific status
-    query = select(Module).where(Module.is_active == True).order_by(Module.category, Module.name)
+    query = (
+        select(Module)
+        .where(Module.is_active == True)
+        .order_by(Module.category, Module.name)
+    )
     result = await db.execute(query)
     modules = result.scalars().all()
-    
+
     # Get tenant module statuses
     tm_query = select(TenantModule).where(TenantModule.tenant_id == tenant_id)
     tm_result = await db.execute(tm_query)
     tenant_modules = {tm.module_id: tm for tm in tm_result.scalars().all()}
-    
+
     # Build response with effective enabled status
     response = []
     for module in modules:
         tm = tenant_modules.get(module.id)
         # Core modules are always enabled; non-core need explicit TenantModule.is_enabled=True
         is_enabled = module.is_core or (tm is not None and tm.is_enabled)
-        
-        response.append(TenantModuleResponse(
-            id=module.id,
-            code=module.code,
-            name=module.name,
-            name_zh=module.name_zh,
-            description=module.description,
-            description_zh=module.description_zh,
-            category=module.category,
-            version=module.version,
-            is_core=module.is_core,
-            is_active=module.is_active,
-            is_enabled=is_enabled,
-            created_at=module.created_at,
-            updated_at=module.updated_at,
-        ))
-    
+
+        response.append(
+            TenantModuleResponse(
+                id=module.id,
+                code=module.code,
+                name=module.name,
+                name_zh=module.name_zh,
+                description=module.description,
+                description_zh=module.description_zh,
+                category=module.category,
+                version=module.version,
+                is_core=module.is_core,
+                is_active=module.is_active,
+                is_enabled=is_enabled,
+                created_at=module.created_at,
+                updated_at=module.updated_at,
+            )
+        )
+
     return response
 
 
@@ -86,13 +98,13 @@ async def list_all_modules(
     _: dict = Depends(get_platform_user),
 ) -> List[ModuleResponse]:
     """List all modules in the platform catalogue (platform users only).
-    
+
     Returns all modules regardless of active status for platform administration.
     """
     query = select(Module).order_by(Module.category, Module.name)
     result = await db.execute(query)
     modules = result.scalars().all()
-    
+
     return [ModuleResponse.model_validate(m) for m in modules]
 
 
@@ -103,7 +115,7 @@ async def list_tenant_modules(
     _: dict = Depends(get_platform_user),
 ) -> List[TenantModuleResponse]:
     """List modules for a specific tenant with their enabled status (platform users only).
-    
+
     Platform users can view any tenant's module configuration.
     """
     # Verify tenant exists
@@ -113,45 +125,52 @@ async def list_tenant_modules(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Tenant not found",
         )
-    
+
     # Get all active modules
-    query = select(Module).where(Module.is_active == True).order_by(Module.category, Module.name)
+    query = (
+        select(Module)
+        .where(Module.is_active == True)
+        .order_by(Module.category, Module.name)
+    )
     result = await db.execute(query)
     modules = result.scalars().all()
-    
+
     # Get tenant module statuses
     tm_query = select(TenantModule).where(TenantModule.tenant_id == tenant_id)
     tm_result = await db.execute(tm_query)
     tenant_modules = {tm.module_id: tm for tm in tm_result.scalars().all()}
-    
+
     # Build response
     response = []
     for module in modules:
         tm = tenant_modules.get(module.id)
         is_enabled = module.is_core or (tm is not None and tm.is_enabled)
-        
-        response.append(TenantModuleResponse(
-            id=module.id,
-            code=module.code,
-            name=module.name,
-            name_zh=module.name_zh,
-            description=module.description,
-            description_zh=module.description_zh,
-            category=module.category,
-            version=module.version,
-            is_core=module.is_core,
-            is_active=module.is_active,
-            is_enabled=is_enabled,
-            created_at=module.created_at,
-            updated_at=module.updated_at,
-        ))
-    
+
+        response.append(
+            TenantModuleResponse(
+                id=module.id,
+                code=module.code,
+                name=module.name,
+                name_zh=module.name_zh,
+                description=module.description,
+                description_zh=module.description_zh,
+                category=module.category,
+                version=module.version,
+                is_core=module.is_core,
+                is_active=module.is_active,
+                is_enabled=is_enabled,
+                created_at=module.created_at,
+                updated_at=module.updated_at,
+            )
+        )
+
     return response
 
 
 # ============================================================================
 # Module Enable/Disable Endpoints (Platform Admin Only)
 # ============================================================================
+
 
 @router.post("/{module_id}/enable", response_model=TenantModuleResponse)
 async def enable_module(
@@ -161,7 +180,7 @@ async def enable_module(
     _: dict = Depends(get_current_superuser),
 ) -> TenantModuleResponse:
     """Enable a module for a specific tenant (platform admin only).
-    
+
     Core modules are always enabled and cannot be toggled.
     """
     # Get the module
@@ -171,19 +190,19 @@ async def enable_module(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Module not found",
         )
-    
+
     if not module.is_active:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Cannot enable an inactive module",
         )
-    
+
     if module.is_core:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Core modules are always enabled and cannot be toggled",
         )
-    
+
     # Verify tenant exists
     tenant = await db.get(Tenant, tenant_id)
     if not tenant:
@@ -191,14 +210,14 @@ async def enable_module(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Tenant not found",
         )
-    
+
     # Find or create TenantModule record
     query = select(TenantModule).where(
         and_(TenantModule.tenant_id == tenant_id, TenantModule.module_id == module_id)
     )
     result = await db.execute(query)
     tm = result.scalar_one_or_none()
-    
+
     if tm:
         tm.is_enabled = True
     else:
@@ -208,9 +227,9 @@ async def enable_module(
             is_enabled=True,
         )
         db.add(tm)
-    
+
     await db.commit()
-    
+
     return TenantModuleResponse(
         id=module.id,
         code=module.code,
@@ -236,7 +255,7 @@ async def disable_module(
     _: dict = Depends(get_current_superuser),
 ) -> TenantModuleResponse:
     """Disable a module for a specific tenant (platform admin only).
-    
+
     Core modules cannot be disabled.
     """
     # Get the module
@@ -246,13 +265,13 @@ async def disable_module(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Module not found",
         )
-    
+
     if module.is_core:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Core modules cannot be disabled",
         )
-    
+
     # Verify tenant exists
     tenant = await db.get(Tenant, tenant_id)
     if not tenant:
@@ -260,14 +279,14 @@ async def disable_module(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Tenant not found",
         )
-    
+
     # Find or create TenantModule record
     query = select(TenantModule).where(
         and_(TenantModule.tenant_id == tenant_id, TenantModule.module_id == module_id)
     )
     result = await db.execute(query)
     tm = result.scalar_one_or_none()
-    
+
     if tm:
         tm.is_enabled = False
     else:
@@ -277,9 +296,9 @@ async def disable_module(
             is_enabled=False,
         )
         db.add(tm)
-    
+
     await db.commit()
-    
+
     return TenantModuleResponse(
         id=module.id,
         code=module.code,
@@ -301,6 +320,7 @@ async def disable_module(
 # Module CRUD Endpoints (Platform Admin Only)
 # ============================================================================
 
+
 @router.post("/", response_model=ModuleResponse, status_code=status.HTTP_201_CREATED)
 async def create_module(
     module_in: ModuleCreate,
@@ -312,19 +332,19 @@ async def create_module(
     query = select(Module).where(Module.code == module_in.code)
     result = await db.execute(query)
     existing = result.scalar_one_or_none()
-    
+
     if existing:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Module with code '{module_in.code}' already exists",
         )
-    
+
     # Create module
     module = Module(**module_in.model_dump())
     db.add(module)
     await db.commit()
     await db.refresh(module)
-    
+
     return ModuleResponse.model_validate(module)
 
 
@@ -341,7 +361,7 @@ async def get_module(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Module not found",
         )
-    
+
     return ModuleResponse.model_validate(module)
 
 
@@ -353,7 +373,7 @@ async def update_module(
     _: dict = Depends(get_current_superuser),
 ) -> ModuleResponse:
     """Update a module (platform admin only).
-    
+
     Note: code and is_core cannot be changed after creation.
     """
     module = await db.get(Module, module_id)
@@ -362,15 +382,15 @@ async def update_module(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Module not found",
         )
-    
+
     # Update only provided fields
     update_data = module_in.model_dump(exclude_unset=True)
     for key, value in update_data.items():
         setattr(module, key, value)
-    
+
     await db.commit()
     await db.refresh(module)
-    
+
     return ModuleResponse.model_validate(module)
 
 
@@ -381,8 +401,8 @@ async def delete_module(
     _: dict = Depends(get_current_superuser),
 ) -> None:
     """Delete a module (platform admin only).
-    
-    Core modules cannot be deleted.
+
+    Warning: Deleting core modules will affect all tenants and clients.
     """
     module = await db.get(Module, module_id)
     if not module:
@@ -390,13 +410,7 @@ async def delete_module(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Module not found",
         )
-    
-    if module.is_core:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Core modules cannot be deleted",
-        )
-    
+
     await db.delete(module)
     await db.commit()
 
@@ -405,54 +419,61 @@ async def delete_module(
 # Module Access Request Endpoint (Tenant Admins)
 # ============================================================================
 
-@router.post("/requests", response_model=ModuleAccessRequestResponse, status_code=status.HTTP_202_ACCEPTED)
+
+@router.post(
+    "/requests",
+    response_model=ModuleAccessRequestResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
 async def request_module_access(
     request: ModuleAccessRequest,
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_tenant_admin),
 ) -> ModuleAccessRequestResponse:
     """Request access to a module (tenant admin only).
-    
+
     This is a stub endpoint - actual messaging/notification will be implemented later.
     """
     tenant_id = current_user.get("tenant_id")
-    
+
     # Verify module exists
     query = select(Module).where(Module.code == request.module_code)
     result = await db.execute(query)
     module = result.scalar_one_or_none()
-    
+
     if not module:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Module with code '{request.module_code}' not found",
         )
-    
+
     if module.is_core:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Core modules are always enabled and do not require access requests",
         )
-    
+
     # Check if already enabled for this tenant
     tm_query = select(TenantModule).where(
         and_(TenantModule.tenant_id == tenant_id, TenantModule.module_id == module.id)
     )
     tm_result = await db.execute(tm_query)
     tm = tm_result.scalar_one_or_none()
-    
+
     if tm and tm.is_enabled:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Module is already enabled for your tenant",
         )
-    
+
     # TODO: Implement actual messaging/notification to platform admins
     # For now, just log and return a success response
-    print(f"[MODULE REQUEST] Tenant {tenant_id} requested access to module {request.module_code}")
+    print(
+        f"[MODULE REQUEST] Tenant {tenant_id} requested access to module {request.module_code}"
+    )
     if request.message:
         print(f"  Message: {request.message}")
-    
+
     return ModuleAccessRequestResponse(
         status="pending",
         message="Your request has been submitted and will be reviewed by platform administrators.",

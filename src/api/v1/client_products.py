@@ -1,9 +1,11 @@
 """Client-facing products API endpoints."""
 
+from datetime import datetime
 from typing import List, Optional
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +14,8 @@ from src.api.deps import get_current_client
 from src.db.session import get_db
 from src.db.repositories.product_repo import ProductRepository, ProductCategoryRepository
 from src.models.module import Module, TenantModule, ClientModule
+from src.models.product import Product
+from src.services.document_service import DocumentService
 
 router = APIRouter(prefix="/client", tags=["Client Products"])
 
@@ -60,6 +64,20 @@ class ClientCategoryResponse(BaseModel):
     description: Optional[str] = None
     icon: Optional[str] = None
     sort_order: int
+
+    class Config:
+        from_attributes = True
+
+
+class ClientProductDocumentResponse(BaseModel):
+    """Product document response for client API."""
+    id: str
+    name: str
+    file_name: str
+    file_size: int
+    mime_type: str
+    description: Optional[str] = None
+    created_at: datetime
 
     class Config:
         from_attributes = True
@@ -297,3 +315,137 @@ async def get_client_categories(
         )
         for c in categories
     ]
+
+
+# ============================================================================
+# Product Documents Endpoints (Client-Facing)
+# ============================================================================
+
+
+async def _verify_client_product_access(
+    product_id: str,
+    current_client: dict,
+    db: AsyncSession,
+) -> Product:
+    """Verify client has access to the product and return it."""
+    tenant_id = current_client["tenant_id"]
+    client_id = current_client["client_id"]
+    
+    # Get the product - use direct query to avoid tenancy filter
+    # since platform products have tenant_id=None
+    result = await db.execute(select(Product).where(Product.id == product_id))
+    product = result.scalar_one_or_none()
+    
+    # Also create repo for other operations
+    product_repo = ProductRepository(db)
+    
+    if not product:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Product not found",
+        )
+    
+    # Check if this product is accessible to the client's tenant
+    if product.tenant_id is not None:
+        # Tenant-specific product - must match client's tenant
+        if product.tenant_id != tenant_id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Product not found",
+            )
+    else:
+        # Platform product - must be unlocked for all or synced to tenant
+        if not product.is_unlocked_for_all:
+            synced_tenants = await product_repo.get_synced_tenant_ids(product_id)
+            if tenant_id not in synced_tenants:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Product not found",
+                )
+    
+    # Verify client has access to the product's module
+    if product.module_id:
+        enabled_modules = await get_client_enabled_modules(db, tenant_id, client_id)
+        enabled_module_ids = {m.id for m in enabled_modules}
+        
+        if product.module_id not in enabled_module_ids:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You don't have access to this product's module",
+            )
+    
+    return product
+
+
+@router.get(
+    "/products/{product_id}/documents",
+    response_model=List[ClientProductDocumentResponse],
+    summary="Get product documents",
+    description="Get all documents attached to a product.",
+)
+async def get_product_documents(
+    product_id: str,
+    current_client: dict = Depends(get_current_client),
+    db: AsyncSession = Depends(get_db),
+) -> List[ClientProductDocumentResponse]:
+    """Get documents for a product the client has access to."""
+    product = await _verify_client_product_access(product_id, current_client, db)
+    
+    doc_service = DocumentService(db)
+    documents = await doc_service.get_product_documents(product_id)
+    
+    return [
+        ClientProductDocumentResponse(
+            id=doc.id,
+            name=doc.name,
+            file_name=doc.file_name,
+            file_size=doc.file_size,
+            mime_type=doc.mime_type,
+            description=doc.description,
+            created_at=doc.created_at,
+        )
+        for doc in documents
+    ]
+
+
+@router.get(
+    "/products/{product_id}/documents/{document_id}/download",
+    summary="Download product document",
+    description="Download a product document.",
+    responses={
+        200: {"description": "File download (local storage)"},
+        302: {"description": "Redirect to presigned URL (S3 storage)"},
+        404: {"description": "Document not found"},
+    },
+)
+async def download_product_document(
+    product_id: str,
+    document_id: str,
+    current_client: dict = Depends(get_current_client),
+    db: AsyncSession = Depends(get_db),
+):
+    """Download a product document."""
+    # Verify access to product first
+    await _verify_client_product_access(product_id, current_client, db)
+    
+    # Verify document belongs to this product
+    doc_service = DocumentService(db)
+    document = await doc_service.verify_product_access(document_id, product_id)
+    
+    if not document:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document not found",
+        )
+    
+    # Return file or redirect to presigned URL
+    file_path = doc_service.get_file_path(document)
+    if file_path:
+        return FileResponse(
+            path=str(file_path),
+            filename=document.file_name,
+            media_type=document.mime_type,
+        )
+    else:
+        download_url = doc_service.get_download_url(document)
+        return RedirectResponse(url=download_url, status_code=status.HTTP_302_FOUND)

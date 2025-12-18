@@ -270,7 +270,7 @@ async def get_client_documents(
                 if hasattr(doc.document_type, "value")
                 else doc.document_type
             ),
-            "file_path": doc.file_path,
+            "file_path": doc.s3_key,
             "created_at": doc.created_at.isoformat() if doc.created_at else None,
         }
         for doc in documents

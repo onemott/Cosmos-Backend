@@ -36,6 +36,9 @@ class Settings(BaseSettings):
     s3_bucket_name: str = "eam-platform-documents"
     s3_bucket_region: str = "ap-southeast-1"
 
+    # Document Storage
+    storage_backend: str = "local"  # "local" or "s3"
+
     # Auth (OIDC/OAuth2)
     oidc_issuer_url: str = ""
     oidc_client_id: str = ""

@@ -1,7 +1,8 @@
 """Product endpoints."""
 
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File, Form
+from fastapi.responses import FileResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,7 +14,7 @@ from src.api.deps import (
 )
 from src.db.repositories.product_repo import ProductRepository, ProductCategoryRepository
 from src.models.module import Module, TenantModule
-from src.models.product import TenantProduct
+from src.models.product import TenantProduct, Product
 from src.models.tenant import Tenant
 from src.schemas.product import (
     ProductCreate,
@@ -24,6 +25,13 @@ from src.schemas.product import (
     PlatformProductUpdate,
     ProductSyncUpdate,
 )
+from src.schemas.document import (
+    DocumentUploadResponse,
+    ProductDocumentSummary,
+    ProductDocumentList,
+)
+from src.services.document_service import DocumentService
+from src.services.storage.local import LocalStorageBackend
 
 router = APIRouter()
 
@@ -126,7 +134,21 @@ async def list_products(
     )
 
     # product_tuples is a list of (Product, TenantProduct) tuples
-    return [_build_product_response(p, tp) for p, tp in product_tuples]
+    # Check if user is platform admin to include synced_tenant_ids
+    is_platform_admin = any(
+        role in current_user.get("roles", [])
+        for role in ["super_admin", "platform_admin"]
+    )
+    
+    responses = []
+    for p, tp in product_tuples:
+        synced_ids = None
+        # For platform products (tenant_id is None), include synced_tenant_ids for platform admins
+        if is_platform_admin and p.tenant_id is None:
+            synced_ids = await repo.get_synced_tenant_ids(p.id)
+        responses.append(_build_product_response(p, tp, synced_tenant_ids=synced_ids))
+    
+    return responses
 
 
 @router.get("/defaults", response_model=List[ProductResponse])
@@ -606,3 +628,348 @@ async def update_product_sync(
     product = await repo.get_with_relations(product.id)
     synced_ids = await repo.get_synced_tenant_ids(product.id)
     return _build_product_response(product, synced_tenant_ids=synced_ids)
+
+
+# ============================================================================
+# Product Document Endpoints
+# ============================================================================
+
+
+async def _get_product_for_documents(
+    product_id: str,
+    db: AsyncSession,
+    current_user: dict,
+    require_admin: bool = False,
+) -> Product:
+    """Helper to get product and verify access for document operations.
+    
+    Args:
+        product_id: Product UUID
+        db: Database session
+        current_user: Current user dict
+        require_admin: If True, require tenant_admin or platform_admin role
+        
+    Returns:
+        Product model instance
+        
+    Raises:
+        HTTPException: If product not found or access denied
+    """
+    tenant_id = current_user.get("tenant_id")
+    is_platform_admin = any(
+        role in current_user.get("roles", [])
+        for role in ["super_admin", "platform_admin"]
+    )
+    is_tenant_admin = any(
+        role in current_user.get("roles", [])
+        for role in ["super_admin", "platform_admin", "tenant_admin"]
+    )
+    
+    if require_admin and not is_tenant_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access required",
+        )
+    
+    repo = ProductRepository(db)
+    product = await repo.get_with_relations(product_id)
+    
+    if not product:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Product not found",
+        )
+    
+    # Platform admins can access all products
+    if is_platform_admin:
+        return product
+    
+    # For tenant products, check tenant ownership
+    if product.tenant_id is not None:
+        if product.tenant_id != tenant_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied",
+            )
+        return product
+    
+    # For platform products, check if accessible to this tenant
+    if not tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="User must belong to a tenant",
+        )
+    
+    # Check module is enabled for tenant
+    module = product.module
+    if not module or not module.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Module not active",
+        )
+    
+    if not module.is_core:
+        tm_query = select(TenantModule).where(
+            TenantModule.tenant_id == tenant_id,
+            TenantModule.module_id == module.id,
+            TenantModule.is_enabled == True,
+        )
+        tm_result = await db.execute(tm_query)
+        if not tm_result.scalar_one_or_none():
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Module not enabled for this tenant",
+            )
+    
+    # Check product is unlocked for this tenant
+    if product.is_unlocked_for_all:
+        return product
+    
+    tenant_product = await repo.get_tenant_product(tenant_id, product_id)
+    if not tenant_product:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Product not available for this tenant",
+        )
+    
+    return product
+
+
+@router.get("/{product_id}/documents", response_model=ProductDocumentList)
+async def list_product_documents(
+    product_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+) -> ProductDocumentList:
+    """List all documents for a product.
+    
+    Access follows product access rules - users who can view the product
+    can also view its documents.
+    """
+    product = await _get_product_for_documents(product_id, db, current_user)
+    
+    # Get the tenant_id for the product (platform products use None)
+    product_tenant_id = product.tenant_id
+    
+    doc_service = DocumentService(db)
+    documents = await doc_service.get_product_documents(
+        product_id=product_id,
+        tenant_id=product_tenant_id,
+    )
+    
+    return ProductDocumentList(
+        documents=[
+            ProductDocumentSummary(
+                id=doc.id,
+                name=doc.name,
+                file_name=doc.file_name,
+                file_size=doc.file_size,
+                mime_type=doc.mime_type,
+                description=doc.description,
+                created_at=doc.created_at,
+                uploaded_by_id=doc.uploaded_by_id,
+            )
+            for doc in documents
+        ],
+        total_count=len(documents),
+    )
+
+
+@router.post(
+    "/{product_id}/documents/upload",
+    response_model=DocumentUploadResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def upload_product_document(
+    product_id: str,
+    file: UploadFile = File(..., description="File to upload (PDF, Word, images)"),
+    name: Optional[str] = Form(None, description="Display name (defaults to filename)"),
+    description: Optional[str] = Form(None, description="Document description"),
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_tenant_admin),
+) -> DocumentUploadResponse:
+    """Upload a document for a product.
+    
+    Requires tenant_admin role for tenant products, or platform_admin for platform products.
+    Allowed file types: PDF, Word (.doc, .docx), Images (PNG, JPG, GIF, WebP)
+    Maximum file size: 50MB
+    """
+    product = await _get_product_for_documents(
+        product_id, db, current_user, require_admin=True
+    )
+    
+    # Additional check: only platform admins can upload to platform products
+    is_platform_admin = any(
+        role in current_user.get("roles", [])
+        for role in ["super_admin", "platform_admin"]
+    )
+    
+    if product.tenant_id is None and not is_platform_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only platform admins can upload documents to platform products",
+        )
+    
+    # Check file size before reading into memory (prevent memory attacks)
+    if file.size and file.size > 50 * 1024 * 1024:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="File size exceeds 50MB limit",
+        )
+    
+    # Read file content
+    file_content = await file.read()
+    
+    if not file_content:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="File is empty",
+        )
+    
+    # Determine tenant_id for storage path and document record
+    # For platform products, use the platform tenant (seeded in seed_admin.py)
+    PLATFORM_TENANT_ID = "00000000-0000-0000-0000-000000000000"
+    storage_tenant_id = product.tenant_id or PLATFORM_TENANT_ID
+    
+    doc_service = DocumentService(db)
+    
+    try:
+        document = await doc_service.save_product_document(
+            file_content=file_content,
+            file_name=file.filename or "document",
+            product_id=product_id,
+            tenant_id=storage_tenant_id,
+            document_name=name,
+            description=description,
+            uploaded_by_id=current_user.get("user_id"),
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+    
+    return DocumentUploadResponse(
+        id=document.id,
+        name=document.name,
+        file_name=document.file_name,
+        file_size=document.file_size,
+        mime_type=document.mime_type,
+        document_type=document.document_type.value,
+        status=document.status.value,
+        description=document.description,
+        created_at=document.created_at,
+        uploaded_by_id=document.uploaded_by_id,
+    )
+
+
+@router.get("/{product_id}/documents/{document_id}")
+async def get_product_document(
+    product_id: str,
+    document_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+) -> ProductDocumentSummary:
+    """Get details of a specific product document."""
+    product = await _get_product_for_documents(product_id, db, current_user)
+    
+    doc_service = DocumentService(db)
+    document = await doc_service.verify_product_access(document_id, product_id)
+    
+    if not document:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document not found",
+        )
+    
+    return ProductDocumentSummary(
+        id=document.id,
+        name=document.name,
+        file_name=document.file_name,
+        file_size=document.file_size,
+        mime_type=document.mime_type,
+        description=document.description,
+        created_at=document.created_at,
+        uploaded_by_id=document.uploaded_by_id,
+    )
+
+
+@router.get("/{product_id}/documents/{document_id}/download")
+async def download_product_document(
+    product_id: str,
+    document_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Download a product document.
+    
+    For local storage: Returns the file directly.
+    For S3 storage: Redirects to a presigned URL.
+    """
+    product = await _get_product_for_documents(product_id, db, current_user)
+    
+    doc_service = DocumentService(db)
+    document = await doc_service.verify_product_access(document_id, product_id)
+    
+    if not document:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document not found",
+        )
+    
+    # Check if using local storage
+    file_path = doc_service.get_file_path(document)
+    
+    if file_path:
+        # Local storage - return file directly
+        return FileResponse(
+            path=str(file_path),
+            filename=document.file_name,
+            media_type=document.mime_type,
+        )
+    else:
+        # S3 storage - redirect to presigned URL
+        download_url = doc_service.get_download_url(document)
+        return RedirectResponse(url=download_url, status_code=status.HTTP_302_FOUND)
+
+
+@router.delete(
+    "/{product_id}/documents/{document_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_product_document(
+    product_id: str,
+    document_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_tenant_admin),
+) -> None:
+    """Delete a product document.
+    
+    Requires tenant_admin role for tenant products, or platform_admin for platform products.
+    """
+    product = await _get_product_for_documents(
+        product_id, db, current_user, require_admin=True
+    )
+    
+    # Additional check: only platform admins can delete from platform products
+    is_platform_admin = any(
+        role in current_user.get("roles", [])
+        for role in ["super_admin", "platform_admin"]
+    )
+    
+    if product.tenant_id is None and not is_platform_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only platform admins can delete documents from platform products",
+        )
+    
+    doc_service = DocumentService(db)
+    document = await doc_service.verify_product_access(document_id, product_id)
+    
+    if not document:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document not found",
+        )
+    
+    await doc_service.delete_document(document)

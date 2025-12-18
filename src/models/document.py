@@ -3,7 +3,7 @@
 from typing import TYPE_CHECKING, Optional
 from uuid import uuid4
 
-from sqlalchemy import String, ForeignKey, Integer, Enum as SQLEnum
+from sqlalchemy import String, ForeignKey, Integer, Enum as SQLEnum, CheckConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 import enum
@@ -12,6 +12,7 @@ from src.db.base import Base, TimestampMixin
 
 if TYPE_CHECKING:
     from src.models.client import Client
+    from src.models.product import Product
 
 
 class DocumentType(str, enum.Enum):
@@ -49,7 +50,10 @@ class Document(Base, TimestampMixin):
         UUID(as_uuid=False), nullable=False, index=True
     )
     client_id: Mapped[Optional[str]] = mapped_column(
-        UUID(as_uuid=False), ForeignKey("clients.id"), nullable=True
+        UUID(as_uuid=False), ForeignKey("clients.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    product_id: Mapped[Optional[str]] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("products.id", ondelete="CASCADE"), nullable=True, index=True
     )
 
     # Document details
@@ -79,5 +83,17 @@ class Document(Base, TimestampMixin):
     # Relationships
     client: Mapped[Optional["Client"]] = relationship(
         "Client", back_populates="documents"
+    )
+    product: Mapped[Optional["Product"]] = relationship(
+        "Product", back_populates="documents"
+    )
+
+    __table_args__ = (
+        # Document must belong to either a client OR a product, not both
+        CheckConstraint(
+            "(client_id IS NOT NULL AND product_id IS NULL) OR "
+            "(client_id IS NULL AND product_id IS NOT NULL)",
+            name="ck_document_owner"
+        ),
     )
 

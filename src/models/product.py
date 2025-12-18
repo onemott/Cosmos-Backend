@@ -21,6 +21,7 @@ from src.db.base import Base, TimestampMixin
 if TYPE_CHECKING:
     from src.models.tenant import Tenant
     from src.models.module import Module
+    from src.models.document import Document
 
 
 class TenantProduct(Base, TimestampMixin):
@@ -177,6 +178,9 @@ class Product(Base, TimestampMixin):
     )
     tenant_products: Mapped[list["TenantProduct"]] = relationship(
         "TenantProduct", back_populates="product", cascade="all, delete-orphan"
+    )
+    documents: Mapped[list["Document"]] = relationship(
+        "Document", back_populates="product", cascade="all, delete-orphan"
     )
 
     __table_args__ = (

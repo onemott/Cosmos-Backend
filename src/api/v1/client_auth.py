@@ -29,6 +29,7 @@ from src.schemas.client_auth import (
     ClientRefreshRequest,
     ClientUserProfile,
     ClientPasswordChangeRequest,
+    ClientLanguageUpdateRequest,
     MessageResponse,
 )
 
@@ -161,6 +162,7 @@ async def register_client_user(
         last_login_at=client_user.last_login_at,
         mfa_enabled=client_user.mfa_enabled,
         created_at=client_user.created_at,
+        language=client_user.language,
     )
 
 
@@ -407,6 +409,7 @@ async def get_current_client_profile(
         created_at=client_user.created_at,
         tenant_name=tenant.name if tenant else None,
         risk_profile=client.risk_profile.value if client and client.risk_profile else None,
+        language=client_user.language,
     )
 
 
@@ -480,5 +483,89 @@ async def change_password(
     return MessageResponse(
         message="Password changed successfully",
         success=True,
+    )
+
+
+@router.patch(
+    "/language",
+    response_model=ClientUserProfile,
+    summary="Update language preference",
+    description="Update the current client's language preference.",
+)
+async def update_language(
+    request: ClientLanguageUpdateRequest,
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: AsyncSession = Depends(get_db),
+) -> ClientUserProfile:
+    """Update the authenticated client's language preference."""
+    
+    if not credentials:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required",
+        )
+    
+    # Decode and validate token
+    payload = decode_token(credentials.credentials)
+    if not payload:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token",
+        )
+    
+    # Verify it's a client token
+    if payload.user_type != "client":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Client access required",
+        )
+    
+    # Get the client user
+    client_user = await get_client_user_by_id(db, payload.sub)
+    
+    if not client_user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Client user not found",
+        )
+    
+    if not client_user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account is deactivated",
+        )
+    
+    # Update language preference
+    client_user.language = request.language
+    await db.commit()
+    await db.refresh(client_user)
+    
+    # Fetch client and tenant info for extended profile
+    from src.models.client import Client
+    from src.models.tenant import Tenant
+    
+    client_result = await db.execute(
+        select(Client).where(Client.id == client_user.client_id)
+    )
+    client = client_result.scalar_one_or_none()
+    
+    tenant_result = await db.execute(
+        select(Tenant).where(Tenant.id == client_user.tenant_id)
+    )
+    tenant = tenant_result.scalar_one_or_none()
+    
+    return ClientUserProfile(
+        id=client_user.id,
+        client_id=client_user.client_id,
+        tenant_id=client_user.tenant_id,
+        email=client_user.email,
+        client_name=client_user.display_name,
+        is_active=client_user.is_active,
+        last_login_at=client_user.last_login_at,
+        mfa_enabled=client_user.mfa_enabled,
+        created_at=client_user.created_at,
+        tenant_name=tenant.name if tenant else None,
+        risk_profile=client.risk_profile.value if client and client.risk_profile else None,
+        language=client_user.language,
     )
 

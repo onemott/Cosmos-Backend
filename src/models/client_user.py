@@ -69,6 +69,9 @@ class ClientUser(Base, TimestampMixin):
     mfa_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     mfa_secret: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     
+    # User preferences
+    language: Mapped[str] = mapped_column(String(10), default="en")
+    
     # Relationships
     client: Mapped["Client"] = relationship(
         "Client", 

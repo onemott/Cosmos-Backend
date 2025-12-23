@@ -53,6 +53,8 @@ class ClientUserProfile(BaseModel):
     # Extended fields from joins
     tenant_name: Optional[str] = Field(None, description="Tenant/EAM firm name")
     risk_profile: Optional[str] = Field(None, description="Client risk profile")
+    # User preferences
+    language: str = Field(default="en", description="Preferred language (en, zh-CN)")
 
     class Config:
         from_attributes = True
@@ -63,6 +65,16 @@ class ClientPasswordChangeRequest(BaseModel):
     
     current_password: str = Field(..., min_length=8, description="Current password")
     new_password: str = Field(..., min_length=8, description="New password")
+
+
+class ClientLanguageUpdateRequest(BaseModel):
+    """Request schema for updating language preference."""
+    
+    language: str = Field(
+        ..., 
+        pattern="^(en|zh-CN)$",
+        description="Language code (en or zh-CN)"
+    )
 
 
 class MessageResponse(BaseModel):

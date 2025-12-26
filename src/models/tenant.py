@@ -17,7 +17,18 @@ if TYPE_CHECKING:
 
 
 class Tenant(Base, TimestampMixin):
-    """EAM firm / tenant model."""
+    """EAM firm / tenant model.
+    
+    Attributes:
+        branding: JSON field for tenant branding configuration.
+            Expected structure:
+            {
+                "app_name": "Custom App Name",  # Display name in client app
+                "primary_color": "#1E40AF",     # Hex color code
+                "logo_url": "/api/v1/tenants/{id}/logo",  # Logo endpoint URL
+                "has_logo": true                # Whether logo file exists
+            }
+    """
 
     __tablename__ = "tenants"
 
@@ -30,7 +41,7 @@ class Tenant(Base, TimestampMixin):
     slug: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
-    # Branding and configuration
+    # Branding configuration (see class docstring for structure)
     branding: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     settings: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 

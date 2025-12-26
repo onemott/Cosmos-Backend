@@ -5,6 +5,18 @@ from typing import Optional
 from pydantic import BaseModel, EmailStr, Field
 
 
+class TenantBrandingInfo(BaseModel):
+    """Embedded tenant branding information for client responses."""
+    
+    app_name: Optional[str] = Field(None, description="Custom app name for the tenant")
+    primary_color: Optional[str] = Field(None, description="Primary brand color (hex)")
+    logo_url: Optional[str] = Field(None, description="URL to tenant logo")
+    has_logo: bool = Field(default=False, description="Whether tenant has a logo")
+
+    class Config:
+        from_attributes = True
+
+
 class ClientLoginRequest(BaseModel):
     """Request schema for client login."""
     
@@ -30,6 +42,8 @@ class ClientTokenResponse(BaseModel):
     client_id: str = Field(..., description="Client UUID")
     client_name: str = Field(..., description="Client display name")
     tenant_id: str = Field(..., description="Tenant UUID")
+    tenant_name: Optional[str] = Field(None, description="Tenant/EAM firm name")
+    tenant_branding: Optional[TenantBrandingInfo] = Field(None, description="Tenant branding info")
 
 
 class ClientRefreshRequest(BaseModel):
@@ -55,6 +69,8 @@ class ClientUserProfile(BaseModel):
     risk_profile: Optional[str] = Field(None, description="Client risk profile")
     # User preferences
     language: str = Field(default="en", description="Preferred language (en, zh-CN)")
+    # Tenant branding
+    tenant_branding: Optional[TenantBrandingInfo] = Field(None, description="Tenant branding info")
 
     class Config:
         from_attributes = True

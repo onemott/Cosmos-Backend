@@ -31,7 +31,9 @@ from src.schemas.client_auth import (
     ClientPasswordChangeRequest,
     ClientLanguageUpdateRequest,
     MessageResponse,
+    TenantBrandingInfo,
 )
+from src.services.branding_service import get_logo_url, has_logo
 
 router = APIRouter(prefix="/client/auth", tags=["Client Authentication"])
 security = HTTPBearer(auto_error=False)
@@ -64,6 +66,27 @@ async def check_tenant_active(db: AsyncSession, tenant_id: str) -> bool:
     )
     tenant = result.scalar_one_or_none()
     return tenant is not None and tenant.is_active
+
+
+async def get_tenant_branding_info(db: AsyncSession, tenant_id: str) -> Optional[TenantBrandingInfo]:
+    """Get tenant branding information."""
+    result = await db.execute(
+        select(Tenant).where(Tenant.id == tenant_id)
+    )
+    tenant = result.scalar_one_or_none()
+    
+    if not tenant:
+        return None
+    
+    branding = tenant.branding or {}
+    tenant_has_logo = has_logo(str(tenant_id))
+    
+    return TenantBrandingInfo(
+        app_name=branding.get("app_name"),
+        primary_color=branding.get("primary_color"),
+        logo_url=get_logo_url(str(tenant_id)) if tenant_has_logo else None,
+        has_logo=tenant_has_logo,
+    )
 
 
 @router.post(
@@ -212,6 +235,13 @@ async def login(
     client_user.last_login_at = datetime.now(timezone.utc)
     await db.commit()
     
+    # Fetch tenant info and branding
+    tenant_result = await db.execute(
+        select(Tenant).where(Tenant.id == client_user.tenant_id)
+    )
+    tenant = tenant_result.scalar_one_or_none()
+    tenant_branding = await get_tenant_branding_info(db, client_user.tenant_id)
+    
     # Generate tokens
     access_token = create_client_access_token(
         client_user_id=client_user.id,
@@ -232,6 +262,8 @@ async def login(
         client_id=client_user.client_id,
         client_name=client_user.display_name,
         tenant_id=client_user.tenant_id,
+        tenant_name=tenant.name if tenant else None,
+        tenant_branding=tenant_branding,
     )
 
 
@@ -285,6 +317,13 @@ async def refresh_token(
             detail="Your organization's account has been deactivated",
         )
     
+    # Fetch tenant info and branding
+    tenant_result = await db.execute(
+        select(Tenant).where(Tenant.id == client_user.tenant_id)
+    )
+    tenant = tenant_result.scalar_one_or_none()
+    tenant_branding = await get_tenant_branding_info(db, client_user.tenant_id)
+    
     # Generate new tokens
     access_token = create_client_access_token(
         client_user_id=client_user.id,
@@ -305,6 +344,8 @@ async def refresh_token(
         client_id=client_user.client_id,
         client_name=client_user.display_name,
         tenant_id=client_user.tenant_id,
+        tenant_name=tenant.name if tenant else None,
+        tenant_branding=tenant_branding,
     )
 
 
@@ -385,7 +426,6 @@ async def get_current_client_profile(
     
     # Fetch client and tenant info for extended profile
     from src.models.client import Client
-    from src.models.tenant import Tenant
     
     client_result = await db.execute(
         select(Client).where(Client.id == client_user.client_id)
@@ -396,6 +436,9 @@ async def get_current_client_profile(
         select(Tenant).where(Tenant.id == client_user.tenant_id)
     )
     tenant = tenant_result.scalar_one_or_none()
+    
+    # Get tenant branding
+    tenant_branding = await get_tenant_branding_info(db, client_user.tenant_id)
     
     return ClientUserProfile(
         id=client_user.id,
@@ -410,6 +453,7 @@ async def get_current_client_profile(
         tenant_name=tenant.name if tenant else None,
         risk_profile=client.risk_profile.value if client and client.risk_profile else None,
         language=client_user.language,
+        tenant_branding=tenant_branding,
     )
 
 
@@ -542,7 +586,6 @@ async def update_language(
     
     # Fetch client and tenant info for extended profile
     from src.models.client import Client
-    from src.models.tenant import Tenant
     
     client_result = await db.execute(
         select(Client).where(Client.id == client_user.client_id)
@@ -553,6 +596,9 @@ async def update_language(
         select(Tenant).where(Tenant.id == client_user.tenant_id)
     )
     tenant = tenant_result.scalar_one_or_none()
+    
+    # Get tenant branding
+    tenant_branding = await get_tenant_branding_info(db, client_user.tenant_id)
     
     return ClientUserProfile(
         id=client_user.id,
@@ -567,5 +613,6 @@ async def update_language(
         tenant_name=tenant.name if tenant else None,
         risk_profile=client.risk_profile.value if client and client.risk_profile else None,
         language=client_user.language,
+        tenant_branding=tenant_branding,
     )
 

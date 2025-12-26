@@ -1,15 +1,52 @@
 """Tenant management endpoints."""
 
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
+from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.db.session import get_db
 from src.db.repositories.tenant_repo import TenantRepository
-from src.schemas.tenant import TenantCreate, TenantUpdate, TenantResponse
-from src.api.deps import get_current_superuser, get_platform_user
+from src.schemas.tenant import (
+    TenantCreate, 
+    TenantUpdate, 
+    TenantResponse,
+    BrandingUpdate,
+    BrandingResponse,
+)
+from src.api.deps import get_current_superuser, get_platform_user, get_current_tenant_admin
+from src.services.branding_service import (
+    get_logo_path,
+    get_logo_url,
+    get_logo_mime_type,
+    has_logo,
+    save_logo,
+    delete_logo,
+    InvalidFileTypeError,
+    FileTooLargeError,
+)
 
 router = APIRouter()
+
+
+def verify_tenant_ownership(current_user: dict, tenant_id: str) -> None:
+    """Verify user can manage the specified tenant.
+    
+    Platform admins can manage any tenant.
+    Tenant admins can only manage their own tenant.
+    
+    Raises:
+        HTTPException: If user cannot manage the tenant
+    """
+    user_roles = set(current_user.get("roles", []))
+    platform_roles = {"super_admin", "platform_admin"}
+    
+    if not platform_roles.intersection(user_roles):
+        if current_user.get("tenant_id") != tenant_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You can only manage your own tenant's branding",
+            )
 
 
 @router.get("/", response_model=List[TenantResponse])
@@ -154,4 +191,221 @@ async def delete_tenant_permanent(
     
     # Hard delete - this will cascade to related records
     await repo.delete(tenant)
+
+
+# ============================================================================
+# Branding Endpoints
+# ============================================================================
+
+@router.get("/{tenant_id}/branding", response_model=BrandingResponse)
+async def get_tenant_branding(
+    tenant_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> BrandingResponse:
+    """Get tenant branding configuration.
+    
+    This is a PUBLIC endpoint - no authentication required.
+    Used by client apps to display tenant branding before/after login.
+    """
+    repo = TenantRepository(db)
+    tenant = await repo.get(tenant_id)
+    
+    if not tenant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Tenant not found",
+        )
+    
+    # Parse branding from JSON field
+    branding = tenant.branding or {}
+    
+    # Check logo once to avoid duplicate filesystem access
+    tenant_has_logo = has_logo(str(tenant.id))
+    
+    return BrandingResponse(
+        tenant_id=str(tenant.id),
+        tenant_name=tenant.name,
+        app_name=branding.get("app_name"),
+        primary_color=branding.get("primary_color"),
+        logo_url=get_logo_url(str(tenant.id)) if tenant_has_logo else None,
+        has_logo=tenant_has_logo,
+    )
+
+
+@router.post("/{tenant_id}/branding", response_model=BrandingResponse)
+async def update_tenant_branding(
+    tenant_id: str,
+    branding_in: BrandingUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_tenant_admin),
+) -> BrandingResponse:
+    """Update tenant branding configuration.
+    
+    Tenant admins can only update their own tenant's branding.
+    Platform admins can update any tenant's branding.
+    """
+    verify_tenant_ownership(current_user, tenant_id)
+    
+    repo = TenantRepository(db)
+    tenant = await repo.get(tenant_id)
+    
+    if not tenant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Tenant not found",
+        )
+    
+    # Merge new branding with existing
+    existing_branding = tenant.branding or {}
+    update_data = branding_in.model_dump(exclude_unset=True)
+    
+    # Update branding fields
+    new_branding = {**existing_branding, **update_data}
+    
+    # Update has_logo flag based on actual file existence
+    new_branding["has_logo"] = has_logo(tenant_id)
+    if new_branding["has_logo"]:
+        new_branding["logo_url"] = get_logo_url(tenant_id)
+    
+    # Save to database
+    await repo.update(tenant, {"branding": new_branding})
+    
+    return BrandingResponse(
+        tenant_id=str(tenant.id),
+        tenant_name=tenant.name,
+        app_name=new_branding.get("app_name"),
+        primary_color=new_branding.get("primary_color"),
+        logo_url=new_branding.get("logo_url"),
+        has_logo=new_branding.get("has_logo", False),
+    )
+
+
+@router.post("/{tenant_id}/logo", response_model=BrandingResponse)
+async def upload_tenant_logo(
+    tenant_id: str,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_tenant_admin),
+) -> BrandingResponse:
+    """Upload a logo for a tenant.
+    
+    Tenant admins can only upload to their own tenant.
+    Platform admins can upload to any tenant.
+    
+    Accepts PNG and JPG files, max 2MB.
+    """
+    verify_tenant_ownership(current_user, tenant_id)
+    
+    repo = TenantRepository(db)
+    tenant = await repo.get(tenant_id)
+    
+    if not tenant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Tenant not found",
+        )
+    
+    # Save the logo file
+    try:
+        await save_logo(tenant_id, file)
+    except InvalidFileTypeError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+    except FileTooLargeError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+    
+    # Update branding to reflect new logo
+    existing_branding = tenant.branding or {}
+    new_branding = {
+        **existing_branding,
+        "has_logo": True,
+        "logo_url": get_logo_url(tenant_id),
+    }
+    await repo.update(tenant, {"branding": new_branding})
+    
+    return BrandingResponse(
+        tenant_id=str(tenant.id),
+        tenant_name=tenant.name,
+        app_name=new_branding.get("app_name"),
+        primary_color=new_branding.get("primary_color"),
+        logo_url=new_branding.get("logo_url"),
+        has_logo=True,
+    )
+
+
+@router.delete("/{tenant_id}/logo", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_tenant_logo(
+    tenant_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_tenant_admin),
+) -> None:
+    """Delete a tenant's logo.
+    
+    Tenant admins can only delete their own tenant's logo.
+    Platform admins can delete any tenant's logo.
+    """
+    verify_tenant_ownership(current_user, tenant_id)
+    
+    repo = TenantRepository(db)
+    tenant = await repo.get(tenant_id)
+    
+    if not tenant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Tenant not found",
+        )
+    
+    # Delete the logo file
+    delete_logo(tenant_id)
+    
+    # Update branding to reflect logo removal
+    existing_branding = tenant.branding or {}
+    new_branding = {
+        **existing_branding,
+        "has_logo": False,
+        "logo_url": None,
+    }
+    await repo.update(tenant, {"branding": new_branding})
+
+
+@router.get("/{tenant_id}/logo")
+async def get_tenant_logo(
+    tenant_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> FileResponse:
+    """Get a tenant's logo file.
+    
+    This is a PUBLIC endpoint - no authentication required.
+    Used by client apps to display tenant logos.
+    """
+    repo = TenantRepository(db)
+    tenant = await repo.get(tenant_id)
+    
+    if not tenant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Tenant not found",
+        )
+    
+    logo_path = get_logo_path(tenant_id)
+    
+    if not logo_path:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No logo found for this tenant",
+        )
+    
+    mime_type = get_logo_mime_type(tenant_id) or "image/png"
+    
+    return FileResponse(
+        path=str(logo_path),
+        media_type=mime_type,
+        filename=f"{tenant.slug}-logo{logo_path.suffix}",
+        headers={"Cache-Control": "public, max-age=86400"},  # 24 hours
+    )
 

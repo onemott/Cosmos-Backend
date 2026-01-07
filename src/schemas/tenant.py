@@ -120,3 +120,20 @@ class TenantResponse(TenantBase):
 
         from_attributes = True
 
+
+# ============================================================================
+# Featured Products Schemas
+# ============================================================================
+
+class FeaturedProductsUpdate(BaseModel):
+    """Schema for updating featured products list."""
+    
+    product_ids: list[str]
+
+
+class FeaturedProductIdsResponse(BaseModel):
+    """Response schema for featured product IDs."""
+    
+    tenant_id: str
+    product_ids: list[str]
+

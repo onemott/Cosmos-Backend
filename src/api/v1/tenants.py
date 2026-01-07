@@ -13,6 +13,8 @@ from src.schemas.tenant import (
     TenantResponse,
     BrandingUpdate,
     BrandingResponse,
+    FeaturedProductsUpdate,
+    FeaturedProductIdsResponse,
 )
 from src.api.deps import get_current_superuser, get_platform_user, get_current_tenant_admin
 from src.services.branding_service import (
@@ -407,5 +409,78 @@ async def get_tenant_logo(
         media_type=mime_type,
         filename=f"{tenant.slug}-logo{logo_path.suffix}",
         headers={"Cache-Control": "public, max-age=86400"},  # 24 hours
+    )
+
+
+# ============================================================================
+# Featured Products Endpoints
+# ============================================================================
+
+@router.get("/{tenant_id}/featured-products", response_model=FeaturedProductIdsResponse)
+async def get_featured_product_ids(
+    tenant_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_tenant_admin),
+) -> FeaturedProductIdsResponse:
+    """Get featured product IDs for a tenant.
+    
+    Tenant admins can only view their own tenant's featured products.
+    Platform admins can view any tenant's featured products.
+    """
+    verify_tenant_ownership(current_user, tenant_id)
+    
+    repo = TenantRepository(db)
+    tenant = await repo.get(tenant_id)
+    
+    if not tenant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Tenant not found",
+        )
+    
+    settings = tenant.settings or {}
+    featured_product_ids = settings.get("featured_product_ids", [])
+    
+    return FeaturedProductIdsResponse(
+        tenant_id=str(tenant.id),
+        product_ids=featured_product_ids,
+    )
+
+
+@router.patch("/{tenant_id}/featured-products", response_model=FeaturedProductIdsResponse)
+async def update_featured_products(
+    tenant_id: str,
+    update_in: FeaturedProductsUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_tenant_admin),
+) -> FeaturedProductIdsResponse:
+    """Update featured product IDs for a tenant.
+    
+    Tenant admins can only update their own tenant's featured products.
+    Platform admins can update any tenant's featured products.
+    """
+    verify_tenant_ownership(current_user, tenant_id)
+    
+    repo = TenantRepository(db)
+    tenant = await repo.get(tenant_id)
+    
+    if not tenant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Tenant not found",
+        )
+    
+    # Update settings with new featured product IDs
+    existing_settings = tenant.settings or {}
+    new_settings = {
+        **existing_settings,
+        "featured_product_ids": update_in.product_ids,
+    }
+    
+    await repo.update(tenant, {"settings": new_settings})
+    
+    return FeaturedProductIdsResponse(
+        tenant_id=str(tenant.id),
+        product_ids=update_in.product_ids,
     )
 

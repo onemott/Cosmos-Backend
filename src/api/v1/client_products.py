@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.api.deps import get_current_client
 from src.db.session import get_db
 from src.db.repositories.product_repo import ProductRepository, ProductCategoryRepository
+from src.db.repositories.tenant_repo import TenantRepository
 from src.models.module import Module, TenantModule, ClientModule
 from src.models.product import Product
 from src.services.document_service import DocumentService
@@ -315,6 +316,84 @@ async def get_client_categories(
         )
         for c in categories
     ]
+
+
+@router.get(
+    "/featured-products",
+    response_model=List[ClientProductResponse],
+    summary="Get featured products",
+    description="Get featured products for the client's tenant.",
+)
+async def get_featured_products(
+    current_client: dict = Depends(get_current_client),
+    db: AsyncSession = Depends(get_db),
+) -> List[ClientProductResponse]:
+    """Get featured products configured by the tenant.
+
+    Returns products that the tenant has marked as featured for display
+    in the client app home screen.
+    """
+    tenant_id = current_client["tenant_id"]
+
+    # Get tenant to read featured product IDs from settings
+    tenant_repo = TenantRepository(db)
+    tenant = await tenant_repo.get(tenant_id)
+
+    if not tenant:
+        return []
+
+    # Get featured product IDs from tenant settings
+    settings = tenant.settings or {}
+    featured_product_ids = settings.get("featured_product_ids", [])
+
+    if not featured_product_ids:
+        return []
+
+    # Fetch all products in a single query (avoid N+1)
+    product_repo = ProductRepository(db)
+    result = await db.execute(
+        select(Product).where(Product.id.in_(featured_product_ids))
+    )
+    products_by_id = {p.id: p for p in result.scalars().all()}
+
+    # Build response list, maintaining the order from featured_product_ids
+    response_products = []
+    for product_id in featured_product_ids:
+        product = products_by_id.get(product_id)
+        
+        if not product or not product.is_visible:
+            continue
+
+        # Verify product is accessible to this tenant
+        if product.tenant_id is not None:
+            # Tenant-specific product - must match
+            if product.tenant_id != tenant_id:
+                continue
+        else:
+            # Platform product - must be unlocked for all or synced to tenant
+            if not product.is_unlocked_for_all:
+                synced_tenants = await product_repo.get_synced_tenant_ids(product_id)
+                if tenant_id not in synced_tenants:
+                    continue
+
+        response_products.append(
+            ClientProductResponse(
+                id=product.id,
+                code=product.code,
+                name=product.name,
+                name_zh=product.name_zh,
+                description=product.description,
+                description_zh=product.description_zh,
+                category=product.category,
+                risk_level=product.risk_level,
+                min_investment=product.min_investment,
+                currency=product.currency,
+                expected_return=product.expected_return,
+                tags=product.extra_data.get("tags", []) if product.extra_data else [],
+            )
+        )
+
+    return response_products
 
 
 # ============================================================================

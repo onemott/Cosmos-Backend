@@ -52,6 +52,7 @@ class ClientProductModule(BaseModel):
     name_zh: Optional[str] = None
     description: Optional[str] = None
     description_zh: Optional[str] = None
+    category: str  # Module category: basic, investment, analytics
     is_enabled: bool
     products: List[ClientProductResponse] = []
 
@@ -188,6 +189,7 @@ async def get_client_products(
             name_zh=module.name_zh,
             description=module.description,
             description_zh=module.description_zh,
+            category=module.category.value if hasattr(module.category, 'value') else str(module.category),
             is_enabled=True,
             products=[
                 ClientProductResponse(

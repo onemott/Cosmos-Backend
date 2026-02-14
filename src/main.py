@@ -3,7 +3,7 @@
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -19,6 +19,7 @@ from src.db.session import engine
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan handler."""
     # Startup
+    print(f"DEBUG: Loaded CORS Origins: {settings.cors_origins}")
     yield
     # Shutdown
     await engine.dispose()
@@ -34,7 +35,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS middleware
+# Standard CORS Middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
@@ -42,6 +43,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 # Include API routers
 app.include_router(api_v1_router, prefix="/api/v1")
@@ -91,4 +93,3 @@ async def generic_exception_handler(request: Request, exc: Exception):
 async def health_check() -> dict:
     """Health check endpoint."""
     return {"status": "healthy", "version": "0.1.0"}
-

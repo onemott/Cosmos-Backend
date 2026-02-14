@@ -20,6 +20,16 @@ class UserRepository(BaseRepository[User]):
         """Get user by email address."""
         return await self.get_by_field("email", email)
 
+    async def get_by_email_for_auth(self, email: str) -> Optional[User]:
+        """Get user by email with roles loaded for authentication."""
+        query = (
+            select(User)
+            .where(User.email == email)
+            .options(selectinload(User.roles))
+        )
+        result = await self.session.execute(query)
+        return result.scalar_one_or_none()
+
     async def get_by_external_id(self, external_id: str) -> Optional[User]:
         """Get user by external authentication provider ID."""
         return await self.get_by_field("external_id", external_id)

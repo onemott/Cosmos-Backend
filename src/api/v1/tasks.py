@@ -38,6 +38,9 @@ def task_requires_eam_action(task: Task) -> bool:
     if task.workflow_state == WorkflowState.DECLINED and task.status != TaskStatus.CANCELLED:
         return True
     if task.status == TaskStatus.PENDING and not task.assigned_to_id:
+        # Exclude tasks that are waiting for client action
+        if task.workflow_state == WorkflowState.PENDING_CLIENT:
+            return False
         return True
     return False
 
@@ -209,6 +212,7 @@ async def list_tasks(
                 and_(
                     Task.status == TaskStatus.PENDING,
                     Task.assigned_to_id.is_(None),
+                    Task.workflow_state != WorkflowState.PENDING_CLIENT,
                 ),
             )
         )
@@ -226,6 +230,11 @@ async def list_tasks(
                 and_(
                     Task.workflow_state == WorkflowState.DECLINED,
                     Task.status != TaskStatus.CANCELLED,
+                ),
+                and_(
+                    Task.status == TaskStatus.PENDING,
+                    Task.assigned_to_id.is_(None),
+                    Task.workflow_state != WorkflowState.PENDING_CLIENT,
                 ),
             )
         ).subquery()

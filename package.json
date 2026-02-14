@@ -1,0 +1,5 @@
+{
+  "dependencies": {
+    "@tanstack/react-query-persist-client": "^5.90.22"
+  }
+}

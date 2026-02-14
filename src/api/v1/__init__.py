@@ -6,10 +6,12 @@ from src.api.v1 import auth, tenants, users, clients, accounts, holdings, transa
 from src.api.v1 import documents, tasks, modules, reports, stats, roles
 from src.api.v1 import categories, products, invitations, client_users
 from src.api.v1 import client_auth, client_portfolio, client_documents, client_tasks, client_products
+from src.api.v1 import hello
 
 router = APIRouter()
 
 # Admin/Staff APIs
+router.include_router(hello.router, tags=["Hello"])
 router.include_router(auth.router, prefix="/auth", tags=["Authentication"])
 router.include_router(tenants.router, prefix="/tenants", tags=["Tenants"])
 router.include_router(users.router, prefix="/users", tags=["Users"])

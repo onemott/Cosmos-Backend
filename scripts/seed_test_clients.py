@@ -35,13 +35,13 @@ from src.models.module import Module, TenantModule, ClientModule
 
 
 # ============================================================================
-# Test Client Definitions
+# 测试客户定义
 # ============================================================================
 
-# Test clients to create - keyed by tenant slug
-# Update the tenant slugs below based on your database!
+# 按租户 slug 组织的待创建测试客户配置
+# 请根据数据库中的实际租户 slug 更新下方键名！
 TEST_CLIENTS = {
-    # Platform tenant - full access client
+    # 平台租户——拥有全部模块访问权限的示例客户
     "platform": [
         {
             "email": "demo@platform-eam.com",
@@ -49,11 +49,11 @@ TEST_CLIENTS = {
             "first_name": "Demo",
             "last_name": "User",
             "risk_profile": RiskProfile.BALANCED,
-            # No module restrictions - gets all tenant-enabled modules
+            # 未设置模块限制——自动获得租户启用的所有模块
             "disabled_modules": [],
         },
     ],
-    # Test EAM Firm tenant - clients with different access levels
+    # 测试 EAM Firm 租户——展示不同访问级别的客户
     "test-firm": [
         {
             "email": "alice@testeam-firm.com",
@@ -61,7 +61,7 @@ TEST_CLIENTS = {
             "first_name": "Alice",
             "last_name": "Investor",
             "risk_profile": RiskProfile.GROWTH,
-            # Alice has full access to all tenant modules
+            # Alice 拥有租户全部模块的访问权限
             "disabled_modules": [],
         },
         {
@@ -70,7 +70,7 @@ TEST_CLIENTS = {
             "first_name": "Bob",
             "last_name": "Conservative",
             "risk_profile": RiskProfile.CONSERVATIVE,
-            # Bob has restricted access - no alternatives or AI
+            # Bob 的访问受限——禁用替代投资和 AI 推荐模块
             "disabled_modules": ["alternative_investments", "ai_recommendations"],
         },
     ],

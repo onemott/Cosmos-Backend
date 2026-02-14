@@ -44,6 +44,8 @@ async def list_tasks(
     task_type: Optional[str] = Query(None, description="Filter by task type"),
     pending_only: bool = Query(False, description="Only show tasks requiring action"),
     is_archived: bool = Query(False, description="Filter by archived status"),
+    skip: int = Query(0, ge=0, description="Number of tasks to skip"),
+    limit: int = Query(20, ge=1, le=100, description="Max number of tasks to return"),
 ) -> ClientTaskList:
     """List all tasks for the authenticated client."""
     client_id = current_client["client_id"]
@@ -88,11 +90,52 @@ async def list_tasks(
         Task.created_at.desc(),
     )
     
+    # Apply pagination
+    query = query.offset(skip).limit(limit)
+    
     result = await db.execute(query)
     tasks = result.scalars().all()
     
+    # Get total count for pagination
+    count_query = select(func.count(Task.id)).where(
+        Task.client_id == client_id,
+        Task.is_archived == is_archived,
+    )
+    
+    # Apply filters to count query
+    if status_filter:
+        try:
+            status_enum = TaskStatus(status_filter)
+            count_query = count_query.where(Task.status == status_enum)
+        except ValueError:
+            pass # Should have been caught above
+            
+    if task_type:
+        try:
+            type_enum = TaskType(task_type)
+            count_query = count_query.where(Task.task_type == type_enum)
+        except ValueError:
+            pass # Should have been caught above
+            
+    if pending_only:
+        count_query = count_query.where(
+            Task.workflow_state == WorkflowState.PENDING_CLIENT,
+            Task.status == TaskStatus.PENDING,
+        )
+
+    total_count_result = await db.execute(count_query)
+    total_count = total_count_result.scalar() or 0
+
     # Count pending tasks (from non-archived only)
-    pending_count = sum(1 for t in tasks if task_requires_action(t))
+    # We need a separate query for total pending count because pagination filters the results
+    pending_count_query = select(func.count(Task.id)).where(
+        Task.client_id == client_id,
+        Task.workflow_state == WorkflowState.PENDING_CLIENT,
+        Task.status == TaskStatus.PENDING,
+        Task.is_archived == False,
+    )
+    pending_count_result = await db.execute(pending_count_query)
+    pending_count = pending_count_result.scalar() or 0
     
     return ClientTaskList(
         tasks=[
@@ -111,7 +154,7 @@ async def list_tasks(
             )
             for task in tasks
         ],
-        total_count=len(tasks),
+        total_count=total_count,
         pending_count=pending_count,
     )
 

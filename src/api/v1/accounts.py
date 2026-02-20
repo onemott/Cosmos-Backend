@@ -16,7 +16,6 @@ from src.models.account import Account, AccountType
 from src.models.client import Client
 from src.models.holding import Holding
 
-
 router = APIRouter()
 
 

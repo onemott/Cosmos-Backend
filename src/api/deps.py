@@ -16,6 +16,16 @@ from src.models.client_user import ClientUser
 
 security = HTTPBearer(auto_error=False)
 
+# Platform tenant ID (fixed UUID)
+PLATFORM_TENANT_ID = "00000000-0000-0000-0000-000000000000"
+
+# Role constants for clarity
+PLATFORM_ROLES = {"super_admin", "platform_admin", "platform_user"}
+PLATFORM_ADMIN_ROLES = {"super_admin", "platform_admin"}
+TENANT_ADMIN_ROLES = {"super_admin", "platform_admin", "tenant_admin"}
+SUPERVISOR_ROLES = {"super_admin", "platform_admin", "tenant_admin", "eam_supervisor"}
+ALL_STAFF_ROLES = {"super_admin", "platform_admin", "tenant_admin", "eam_supervisor", "eam_staff"}
+
 
 async def check_tenant_active(db: AsyncSession, tenant_id: str) -> bool:
     """Check if a tenant is active."""
@@ -151,6 +161,123 @@ async def get_current_tenant_admin(
             detail="Admin access required",
         )
     return current_user
+
+
+async def get_platform_tenant_user(
+    current_user: dict = Depends(get_current_user),
+) -> dict:
+    """Ensure current user belongs to the platform tenant.
+    
+    Use for operations that should only be accessible to platform staff.
+    """
+    if current_user.get("tenant_id") != PLATFORM_TENANT_ID:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Platform tenant access required",
+        )
+    return current_user
+
+
+async def get_supervisor_or_higher(
+    current_user: dict = Depends(get_current_user),
+) -> dict:
+    """Ensure current user is a supervisor or higher.
+    
+    Allowed roles:
+    - super_admin, platform_admin: Platform-level access
+    - tenant_admin: Tenant admin access
+    - eam_supervisor: Supervisor access
+    
+    Use for operations that require access to subordinate data.
+    """
+    user_roles = set(current_user.get("roles", []))
+    
+    if not SUPERVISOR_ROLES.intersection(user_roles):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Supervisor access required",
+        )
+    return current_user
+
+
+async def get_eam_staff_or_higher(
+    current_user: dict = Depends(get_current_user),
+) -> dict:
+    """Ensure current user is at least an EAM staff member.
+    
+    Allowed roles:
+    - super_admin, platform_admin: Platform-level access
+    - tenant_admin: Tenant admin access
+    - eam_supervisor: Supervisor access
+    - eam_staff: Staff access
+    
+    Use for basic tenant operations available to all EAM employees.
+    """
+    user_roles = set(current_user.get("roles", []))
+    
+    if not ALL_STAFF_ROLES.intersection(user_roles):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="EAM staff access required",
+        )
+    return current_user
+
+
+def is_platform_admin(user: dict) -> bool:
+    """Check if user has platform-level admin access.
+    
+    Returns True for super_admin and platform_admin roles.
+    """
+    roles = set(user.get("roles", []))
+    return bool(PLATFORM_ADMIN_ROLES.intersection(roles))
+
+
+def is_platform_user(user: dict) -> bool:
+    """Check if user has any platform-level access (including read-only).
+    
+    Returns True for super_admin, platform_admin, and platform_user roles.
+    """
+    roles = set(user.get("roles", []))
+    return bool(PLATFORM_ROLES.intersection(roles))
+
+
+def is_tenant_admin(user: dict) -> bool:
+    """Check if user has tenant admin access or higher.
+    
+    Returns True for super_admin, platform_admin, and tenant_admin roles.
+    """
+    roles = set(user.get("roles", []))
+    return bool(TENANT_ADMIN_ROLES.intersection(roles))
+
+
+def is_supervisor(user: dict) -> bool:
+    """Check if user has supervisor access or higher.
+    
+    Returns True for super_admin, platform_admin, tenant_admin, and eam_supervisor roles.
+    """
+    roles = set(user.get("roles", []))
+    return bool(SUPERVISOR_ROLES.intersection(roles))
+
+
+def get_user_role_level(user: dict) -> str:
+    """Get the highest role level for a user.
+    
+    Returns one of: 'platform_admin', 'platform_user', 'tenant_admin', 
+    'eam_supervisor', 'eam_staff', or 'none'.
+    """
+    roles = set(user.get("roles", []))
+    
+    if {"super_admin", "platform_admin"}.intersection(roles):
+        return "platform_admin"
+    if "platform_user" in roles:
+        return "platform_user"
+    if "tenant_admin" in roles:
+        return "tenant_admin"
+    if "eam_supervisor" in roles:
+        return "eam_supervisor"
+    if "eam_staff" in roles:
+        return "eam_staff"
+    return "none"
 
 
 async def get_optional_user(

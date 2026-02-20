@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from src.models.task import Task
     from src.models.module import ClientModule
     from src.models.client_user import ClientUser
+    from src.models.user import User
 
 
 class ClientType(str, enum.Enum):
@@ -84,6 +85,14 @@ class Client(Base, TimestampMixin):
         UUID(as_uuid=False), ForeignKey("client_groups.id"), nullable=True
     )
 
+    # Client assignment and ownership
+    assigned_to_user_id: Mapped[Optional[str]] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("users.id"), nullable=True, index=True
+    )
+    created_by_user_id: Mapped[Optional[str]] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("users.id"), nullable=True, index=True
+    )
+
     # Basic information
     client_type: Mapped[ClientType] = mapped_column(
         SQLEnum(ClientType), default=ClientType.INDIVIDUAL
@@ -110,19 +119,31 @@ class Client(Base, TimestampMixin):
     group: Mapped[Optional["ClientGroup"]] = relationship(
         "ClientGroup", back_populates="clients"
     )
-    accounts: Mapped[list["Account"]] = relationship("Account", back_populates="client")
+    accounts: Mapped[list["Account"]] = relationship(
+        "Account", back_populates="client", cascade="all, delete-orphan"
+    )
     bank_connections: Mapped[list["BankConnection"]] = relationship(
-        "BankConnection", back_populates="client"
+        "BankConnection", back_populates="client", cascade="all, delete-orphan"
     )
     documents: Mapped[list["Document"]] = relationship(
-        "Document", back_populates="client"
+        "Document", back_populates="client", cascade="all, delete-orphan"
     )
-    tasks: Mapped[list["Task"]] = relationship("Task", back_populates="client")
+    tasks: Mapped[list["Task"]] = relationship(
+        "Task", back_populates="client", cascade="all, delete-orphan"
+    )
     modules: Mapped[list["ClientModule"]] = relationship(
         "ClientModule", back_populates="client", cascade="all, delete-orphan"
     )
     client_user: Mapped[Optional["ClientUser"]] = relationship(
-        "ClientUser", back_populates="client", uselist=False
+        "ClientUser", back_populates="client", uselist=False, cascade="all, delete-orphan"
+    )
+    
+    # User relationships for assignment and creation tracking
+    assigned_to: Mapped[Optional["User"]] = relationship(
+        "User", foreign_keys=[assigned_to_user_id], backref="assigned_clients"
+    )
+    created_by: Mapped[Optional["User"]] = relationship(
+        "User", foreign_keys=[created_by_user_id], backref="created_clients"
     )
 
     @property

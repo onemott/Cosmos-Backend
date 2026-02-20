@@ -5,23 +5,37 @@ AUTHORIZATION MODEL:
 - Even super admins can only see/manage clients within their OWN tenant.
 - Super admins manage the platform (tenants, users), not other EAMs' clients.
 - If your company needs to manage its own clients, it does so as a normal tenant.
+
+ROLE-BASED ACCESS:
+- tenant_admin: Can see all clients in tenant
+- eam_supervisor: Can see own assigned + all subordinates' assigned clients
+- eam_staff: Can only see own assigned clients
 """
 
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from src.db.session import get_db
 from src.db.repositories.client_repo import ClientRepository
+from src.db.repositories.user_repo import UserRepository
 from src.schemas.client import (
     ClientCreate,
     ClientUpdate,
     ClientResponse,
     ClientSummaryResponse,
 )
-from src.api.deps import get_current_user
+from src.api.deps import (
+    get_current_user,
+    get_current_tenant_admin,
+    get_supervisor_or_higher,
+    get_user_role_level,
+    is_tenant_admin as deps_is_tenant_admin,
+    is_supervisor as deps_is_supervisor,
+)
 from src.models.client import Client
 from src.models.account import Account
 from src.models.document import Document
@@ -29,24 +43,42 @@ from src.models.document import Document
 router = APIRouter()
 
 
-@router.get("/", response_model=List[ClientSummaryResponse])
+class ReassignClientRequest(BaseModel):
+    """Request to reassign a client to another user."""
+    new_assignee_id: Optional[str] = None
+
+
+class ClientWithAssigneeResponse(ClientSummaryResponse):
+    """Client summary with assignee information."""
+    assigned_to_user_id: Optional[str] = None
+    assigned_to_name: Optional[str] = None
+    created_by_user_id: Optional[str] = None
+    created_by_name: Optional[str] = None
+
+
+@router.get("/", response_model=List[ClientWithAssigneeResponse])
 async def list_clients(
     skip: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
     search: Optional[str] = Query(None),
     kyc_status: Optional[str] = Query(None, description="Filter by KYC status (pending, in_progress, approved, rejected, expired)"),
+    assigned_to: Optional[str] = Query(None, description="Filter by assigned user ID"),
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
-) -> List[ClientSummaryResponse]:
-    """List clients for the current user's tenant only.
+) -> List[ClientWithAssigneeResponse]:
+    """List clients for the current user's tenant with role-based filtering.
 
-    All users (including super admins) only see clients belonging to their own tenant.
-    This ensures proper data isolation between EAM firms.
+    Access rules:
+    - tenant_admin: See all clients in tenant
+    - eam_supervisor: See own assigned + all subordinates' assigned clients
+    - eam_staff: See only own assigned clients
     """
-    repo = ClientRepository(db)
+    client_repo = ClientRepository(db)
+    user_repo = UserRepository(db)
 
     # STRICT TENANT SCOPING: Always filter by current user's tenant
     tenant_id = current_user.get("tenant_id")
+    user_id = current_user.get("user_id")
 
     if not tenant_id:
         raise HTTPException(
@@ -54,28 +86,67 @@ async def list_clients(
             detail="User must belong to a tenant to access clients",
         )
 
-    if search:
-        clients = await repo.search_clients(
-            search, tenant_id=tenant_id, skip=skip, limit=limit
-        )
+    # Determine role level and get subordinate IDs if needed
+    role_level = get_user_role_level(current_user)
+    subordinate_ids = []
+    
+    if role_level in ["eam_supervisor"]:
+        # Get all subordinate IDs for supervisor
+        subordinate_ids = await user_repo.get_all_subordinate_ids(user_id)
+    elif role_level in ["platform_admin", "tenant_admin"]:
+        role_level = "tenant_admin"  # Normalize for filtering
+    elif role_level == "eam_staff":
+        pass  # Will only see own clients
     else:
-        clients = await repo.get_clients_by_tenant(tenant_id, skip=skip, limit=limit)
+        # For other roles, default to staff-level access
+        role_level = "eam_staff"
+
+    # Use role-based filtering
+    clients = await client_repo.get_clients_for_role(
+        user_id=user_id,
+        subordinate_ids=subordinate_ids,
+        tenant_id=tenant_id,
+        role_level=role_level,
+        skip=skip,
+        limit=limit,
+        search=search,
+        assigned_to=assigned_to,
+    )
 
     # Apply kyc_status filter if provided
     if kyc_status:
         clients = [c for c in clients if c.kyc_status == kyc_status]
 
-    # Build summary responses with AUM
+    # Build summary responses with AUM and assignee info
     result = []
     for client in clients:
-        aum = await repo.get_client_aum(client.id)
+        aum = await client_repo.get_client_aum(client.id)
+        
+        # Get assignee name if assigned
+        assigned_to_name = None
+        if client.assigned_to_user_id:
+            assignee = await user_repo.get(client.assigned_to_user_id)
+            if assignee:
+                assigned_to_name = f"{assignee.first_name} {assignee.last_name}"
+        
+        # Get creator name if available
+        created_by_name = None
+        if client.created_by_user_id:
+            creator = await user_repo.get(client.created_by_user_id)
+            if creator:
+                created_by_name = f"{creator.first_name} {creator.last_name}"
+        
         result.append(
-            ClientSummaryResponse(
+            ClientWithAssigneeResponse(
                 id=client.id,
                 display_name=client.display_name,
                 client_type=client.client_type,
                 kyc_status=client.kyc_status,
                 total_aum=float(aum) if aum else None,
+                assigned_to_user_id=client.assigned_to_user_id,
+                assigned_to_name=assigned_to_name,
+                created_by_user_id=client.created_by_user_id,
+                created_by_name=created_by_name,
             )
         )
 
@@ -88,11 +159,18 @@ async def create_client(
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ) -> ClientResponse:
-    """Create a new client."""
+    """Create a new client.
+    
+    The client will automatically be:
+    - Assigned to the current user (assigned_to_user_id)
+    - Marked as created by the current user (created_by_user_id)
+    """
     repo = ClientRepository(db)
 
     # Check if email already exists in tenant
     tenant_id = current_user.get("tenant_id", "00000000-0000-0000-0000-000000000000")
+    user_id = current_user.get("user_id")
+    
     if client_in.email:
         existing = await repo.get_by_email(client_in.email, tenant_id)
         if existing:
@@ -104,6 +182,11 @@ async def create_client(
     # Prepare client data
     client_data = client_in.model_dump()
     client_data["tenant_id"] = tenant_id
+    client_data["created_by_user_id"] = user_id
+    
+    # Auto-assign to creator if not explicitly assigned
+    if not client_data.get("assigned_to_user_id"):
+        client_data["assigned_to_user_id"] = user_id
 
     # Create client
     client = await repo.create(client_data)
@@ -558,3 +641,235 @@ async def disable_client_module(
         created_at=module.created_at,
         updated_at=module.updated_at,
     )
+
+
+# ============================================================================
+# Client Assignment Endpoints
+# ============================================================================
+
+
+@router.get("/my-assigned", response_model=List[ClientWithAssigneeResponse])
+async def get_my_assigned_clients(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=100),
+    search: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+) -> List[ClientWithAssigneeResponse]:
+    """Get clients assigned to the current user.
+    
+    Quick filter to show only clients where assigned_to_user_id = current user.
+    """
+    client_repo = ClientRepository(db)
+    user_repo = UserRepository(db)
+    
+    tenant_id = current_user.get("tenant_id")
+    user_id = current_user.get("user_id")
+    
+    if not tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="User must belong to a tenant to access clients",
+        )
+    
+    clients = await client_repo.get_clients_by_assignee(
+        user_id=user_id,
+        tenant_id=tenant_id,
+        skip=skip,
+        limit=limit,
+    )
+    
+    # Apply search if provided
+    if search:
+        search_lower = search.lower()
+        clients = [c for c in clients if 
+                   (c.email and search_lower in c.email.lower()) or
+                   (c.first_name and search_lower in c.first_name.lower()) or
+                   (c.last_name and search_lower in c.last_name.lower()) or
+                   (c.entity_name and search_lower in c.entity_name.lower())]
+    
+    result = []
+    for client in clients:
+        aum = await client_repo.get_client_aum(client.id)
+        result.append(
+            ClientWithAssigneeResponse(
+                id=client.id,
+                display_name=client.display_name,
+                client_type=client.client_type,
+                kyc_status=client.kyc_status,
+                total_aum=float(aum) if aum else None,
+                assigned_to_user_id=client.assigned_to_user_id,
+                assigned_to_name=f"{current_user.get('first_name', '')} {current_user.get('last_name', '')}".strip() or None,
+                created_by_user_id=client.created_by_user_id,
+                created_by_name=None,  # Not loading creator for performance
+            )
+        )
+    
+    return result
+
+
+@router.get("/team-assigned", response_model=List[ClientWithAssigneeResponse])
+async def get_team_assigned_clients(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=100),
+    search: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_supervisor_or_higher),
+) -> List[ClientWithAssigneeResponse]:
+    """Get clients assigned to the current user's team.
+    
+    For supervisors: Returns clients assigned to self + all subordinates.
+    For tenant admins: Returns all clients in tenant.
+    
+    Requires supervisor or higher access.
+    """
+    client_repo = ClientRepository(db)
+    user_repo = UserRepository(db)
+    
+    tenant_id = current_user.get("tenant_id")
+    user_id = current_user.get("user_id")
+    
+    if not tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="User must belong to a tenant to access clients",
+        )
+    
+    # Get subordinate IDs
+    subordinate_ids = await user_repo.get_all_subordinate_ids(user_id)
+    all_team_ids = [user_id] + subordinate_ids
+    
+    # Check if tenant admin (can see all)
+    if deps_is_tenant_admin(current_user):
+        clients = await client_repo.get_clients_by_tenant(tenant_id, skip=skip, limit=limit)
+    else:
+        clients = await client_repo.get_clients_by_team(
+            user_ids=all_team_ids,
+            tenant_id=tenant_id,
+            skip=skip,
+            limit=limit,
+        )
+    
+    # Apply search if provided
+    if search:
+        search_lower = search.lower()
+        clients = [c for c in clients if 
+                   (c.email and search_lower in c.email.lower()) or
+                   (c.first_name and search_lower in c.first_name.lower()) or
+                   (c.last_name and search_lower in c.last_name.lower()) or
+                   (c.entity_name and search_lower in c.entity_name.lower())]
+    
+    # Build response with assignee info
+    result = []
+    user_cache = {}  # Cache user lookups
+    
+    for client in clients:
+        aum = await client_repo.get_client_aum(client.id)
+        
+        # Get assignee name with caching
+        assigned_to_name = None
+        if client.assigned_to_user_id:
+            if client.assigned_to_user_id not in user_cache:
+                assignee = await user_repo.get(client.assigned_to_user_id)
+                user_cache[client.assigned_to_user_id] = assignee
+            assignee = user_cache.get(client.assigned_to_user_id)
+            if assignee:
+                assigned_to_name = f"{assignee.first_name} {assignee.last_name}"
+        
+        result.append(
+            ClientWithAssigneeResponse(
+                id=client.id,
+                display_name=client.display_name,
+                client_type=client.client_type,
+                kyc_status=client.kyc_status,
+                total_aum=float(aum) if aum else None,
+                assigned_to_user_id=client.assigned_to_user_id,
+                assigned_to_name=assigned_to_name,
+                created_by_user_id=client.created_by_user_id,
+                created_by_name=None,
+            )
+        )
+    
+    return result
+
+
+@router.post("/{client_id}/reassign", response_model=ClientResponse)
+async def reassign_client(
+    client_id: str,
+    request: ReassignClientRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+) -> ClientResponse:
+    """Reassign a client to another user.
+    
+    Access rules:
+    - tenant_admin: Can reassign to anyone in tenant
+    - eam_supervisor: Can reassign to self or subordinates
+    - eam_staff: Cannot reassign (403)
+    
+    Pass new_assignee_id: null to unassign.
+    """
+    client_repo = ClientRepository(db)
+    user_repo = UserRepository(db)
+    
+    tenant_id = current_user.get("tenant_id")
+    user_id = current_user.get("user_id")
+    
+    client = await client_repo.get(client_id)
+    if not client:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Client not found",
+        )
+    
+    if client.tenant_id != tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied",
+        )
+    
+    # Permission check based on role
+    role_level = get_user_role_level(current_user)
+    
+    if role_level == "eam_staff":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Staff members cannot reassign clients",
+        )
+    
+    if request.new_assignee_id:
+        # Validate new assignee exists and is in same tenant
+        new_assignee = await user_repo.get(request.new_assignee_id)
+        if not new_assignee:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="New assignee not found",
+            )
+        
+        if str(new_assignee.tenant_id) != tenant_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="New assignee must be in the same tenant",
+            )
+        
+        # Supervisor can only assign to self or subordinates
+        if role_level == "eam_supervisor":
+            subordinate_ids = await user_repo.get_all_subordinate_ids(user_id)
+            allowed_ids = [user_id] + subordinate_ids
+            
+            if request.new_assignee_id not in allowed_ids:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Supervisors can only assign clients to themselves or their subordinates",
+                )
+    
+    # Perform reassignment
+    client = await client_repo.reassign_client(
+        client_id=client_id,
+        new_assignee_id=request.new_assignee_id,
+        tenant_id=tenant_id,
+    )
+    
+    await db.commit()
+    
+    return ClientResponse.model_validate(client)

@@ -116,8 +116,10 @@ class Account(Base, TimestampMixin):
     bank_connection: Mapped[Optional["BankConnection"]] = relationship(
         "BankConnection", back_populates="accounts"
     )
-    holdings: Mapped[list["Holding"]] = relationship("Holding", back_populates="account")
+    holdings: Mapped[list["Holding"]] = relationship(
+        "Holding", back_populates="account", cascade="all, delete-orphan"
+    )
     transactions: Mapped[list["Transaction"]] = relationship(
-        "Transaction", back_populates="account"
+        "Transaction", back_populates="account", cascade="all, delete-orphan"
     )
 

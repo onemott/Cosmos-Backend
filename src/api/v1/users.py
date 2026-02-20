@@ -1,6 +1,6 @@
 """User management endpoints."""
 
-from typing import List, Optional
+from typing import List, Optional, Any, Dict
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +12,9 @@ from src.api.deps import (
     get_current_user,
     get_current_tenant_admin,
     get_current_superuser,
+    get_supervisor_or_higher,
+    is_platform_admin as deps_is_platform_admin,
+    is_tenant_admin as deps_is_tenant_admin,
 )
 from src.core.config import settings
 
@@ -25,6 +28,32 @@ class PasswordChangeRequest(BaseModel):
     new_password: str
 
 
+class AssignSupervisorRequest(BaseModel):
+    """Request to assign a supervisor to a user."""
+    
+    supervisor_id: Optional[str] = None
+
+
+class UserWithHierarchyResponse(BaseModel):
+    """User response with hierarchy information."""
+    
+    id: str
+    email: str
+    first_name: str
+    last_name: str
+    tenant_id: str
+    is_active: bool
+    is_superuser: bool
+    roles: List[str]
+    supervisor_id: Optional[str] = None
+    supervisor_name: Optional[str] = None
+    department: Optional[str] = None
+    employee_code: Optional[str] = None
+    subordinate_count: int = 0
+    created_at: Any
+    updated_at: Any
+
+
 def user_to_response(user) -> UserResponse:
     """Convert User model to UserResponse, handling roles properly."""
     return UserResponse(
@@ -36,6 +65,31 @@ def user_to_response(user) -> UserResponse:
         is_active=user.is_active,
         is_superuser=user.is_superuser,
         roles=[role.name for role in user.roles] if user.roles else [],
+        created_at=user.created_at,
+        updated_at=user.updated_at,
+    )
+
+
+def user_to_hierarchy_response(user, subordinate_count: int = 0) -> UserWithHierarchyResponse:
+    """Convert User model to UserWithHierarchyResponse with hierarchy info."""
+    supervisor_name = None
+    if user.supervisor:
+        supervisor_name = f"{user.supervisor.first_name} {user.supervisor.last_name}"
+    
+    return UserWithHierarchyResponse(
+        id=str(user.id),
+        email=user.email,
+        first_name=user.first_name,
+        last_name=user.last_name,
+        tenant_id=str(user.tenant_id),
+        is_active=user.is_active,
+        is_superuser=user.is_superuser,
+        roles=[role.name for role in user.roles] if user.roles else [],
+        supervisor_id=str(user.supervisor_id) if user.supervisor_id else None,
+        supervisor_name=supervisor_name,
+        department=user.department,
+        employee_code=user.employee_code,
+        subordinate_count=subordinate_count,
         created_at=user.created_at,
         updated_at=user.updated_at,
     )
@@ -426,3 +480,236 @@ async def change_password(
     await repo.update(user, {"hashed_password": new_hash})
 
     return {"message": "Password changed successfully"}
+
+
+# ============================================================================
+# Team Management Endpoints
+# ============================================================================
+
+
+@router.get("/{user_id}/subordinates", response_model=List[UserResponse])
+async def get_user_subordinates(
+    user_id: str,
+    direct_only: bool = Query(True, description="Only return direct reports"),
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+) -> List[UserResponse]:
+    """Get subordinates of a user.
+    
+    - Users can view their own subordinates
+    - Supervisors can view subordinates of their team members
+    - Tenant admins can view any user's subordinates in their tenant
+    """
+    repo = UserRepository(db)
+    user = await repo.get(user_id)
+    
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+        )
+    
+    # Access check
+    is_self = user_id == current_user.get("user_id")
+    is_same_tenant = str(user.tenant_id) == current_user.get("tenant_id")
+    is_admin = deps_is_tenant_admin(current_user)
+    
+    if not is_same_tenant:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied",
+        )
+    
+    if not is_self and not is_admin:
+        # Check if current user is a supervisor of this user
+        # (Allow supervisors to see their team's subordinates)
+        all_subordinate_ids = await repo.get_all_subordinate_ids(current_user.get("user_id"))
+        if user_id not in all_subordinate_ids:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied - can only view your own subordinates or those of your team",
+            )
+    
+    subordinates = await repo.get_subordinates(user_id, direct_only=direct_only, include_roles=True)
+    return [user_to_response(sub) for sub in subordinates]
+
+
+@router.get("/{user_id}/team-tree")
+async def get_user_team_tree(
+    user_id: str,
+    max_depth: int = Query(5, ge=1, le=10, description="Maximum tree depth"),
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Get the complete team tree structure for a user.
+    
+    Returns a hierarchical structure showing the user and all subordinates.
+    
+    - Users can view their own team tree
+    - Tenant admins can view any user's team tree in their tenant
+    """
+    repo = UserRepository(db)
+    user = await repo.get(user_id)
+    
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+        )
+    
+    # Access check
+    is_self = user_id == current_user.get("user_id")
+    is_same_tenant = str(user.tenant_id) == current_user.get("tenant_id")
+    is_admin = deps_is_tenant_admin(current_user)
+    
+    if not is_same_tenant:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied",
+        )
+    
+    if not is_self and not is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied - only tenant admins can view other users' team trees",
+        )
+    
+    tree = await repo.get_team_tree(user_id, max_depth=max_depth)
+    return tree
+
+
+@router.post("/{user_id}/assign-supervisor", response_model=UserResponse)
+async def assign_supervisor(
+    user_id: str,
+    request: AssignSupervisorRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_tenant_admin),
+) -> UserResponse:
+    """Assign or update a user's supervisor.
+    
+    - Only tenant admins can assign supervisors
+    - Supervisor must be in the same tenant
+    - Cannot create circular references
+    - Pass supervisor_id: null to remove supervisor
+    """
+    repo = UserRepository(db)
+    user = await repo.get(user_id)
+    
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+        )
+    
+    # Access check - only same tenant
+    if not deps_is_platform_admin(current_user) and str(user.tenant_id) != current_user.get("tenant_id"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied",
+        )
+    
+    # Validate supervisor if provided
+    if request.supervisor_id:
+        supervisor = await repo.get(request.supervisor_id)
+        if not supervisor:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Supervisor not found",
+            )
+        
+        # Must be same tenant
+        if str(supervisor.tenant_id) != str(user.tenant_id):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Supervisor must be in the same tenant",
+            )
+        
+        # Validate no circular reference
+        is_valid = await repo.validate_supervisor_assignment(user_id, request.supervisor_id)
+        if not is_valid:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid supervisor assignment - would create circular reference",
+            )
+    
+    # Update supervisor
+    try:
+        user = await repo.update_supervisor(user_id, request.supervisor_id)
+        await db.commit()
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+    
+    # Reload with roles
+    user = await repo.get_with_roles(user_id)
+    return user_to_response(user)
+
+
+@router.get("/{user_id}/with-hierarchy", response_model=UserWithHierarchyResponse)
+async def get_user_with_hierarchy(
+    user_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+) -> UserWithHierarchyResponse:
+    """Get user by ID with full hierarchy information.
+    
+    Returns user details including supervisor info and subordinate count.
+    """
+    repo = UserRepository(db)
+    user = await repo.get_with_hierarchy(user_id)
+    
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+        )
+    
+    # Access check
+    if not deps_is_platform_admin(current_user) and str(user.tenant_id) != current_user.get("tenant_id"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied",
+        )
+    
+    # Count subordinates
+    subordinate_count = await repo.count_subordinates(user_id, direct_only=True)
+    
+    return user_to_hierarchy_response(user, subordinate_count)
+
+
+@router.get("/tenant/{tenant_id}/org-tree")
+async def get_tenant_org_tree(
+    tenant_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_tenant_admin),
+) -> List[Dict[str, Any]]:
+    """Get the complete organizational tree for a tenant.
+    
+    Returns all users organized by hierarchy, starting from users with no supervisor.
+    
+    - Tenant admins can view their own tenant's org tree
+    - Platform admins can view any tenant's org tree
+    """
+    # Access check
+    if not deps_is_platform_admin(current_user) and tenant_id != current_user.get("tenant_id"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied",
+        )
+    
+    repo = UserRepository(db)
+    
+    # Get all users without a supervisor (top-level users)
+    all_users = await repo.get_users_by_tenant(tenant_id, limit=1000)
+    top_level_users = [u for u in all_users if not u.supervisor_id]
+    
+    # Build tree for each top-level user
+    trees = []
+    for user in top_level_users:
+        tree = await repo.get_team_tree(str(user.id), max_depth=10)
+        if tree:
+            trees.append(tree)
+    
+    return trees

@@ -58,10 +58,30 @@ class User(Base, TimestampMixin):
     # External auth provider ID (Auth0/Cognito)
     external_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 
+    # Organizational hierarchy fields
+    supervisor_id: Mapped[Optional[str]] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("users.id"), nullable=True, index=True
+    )
+    department: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    employee_code: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+
     # Relationships
     tenant: Mapped["Tenant"] = relationship("Tenant", back_populates="users")
     roles: Mapped[list["Role"]] = relationship(
         "Role", secondary=user_roles, back_populates="users"
+    )
+    
+    # Self-referential relationship for organizational hierarchy
+    supervisor: Mapped[Optional["User"]] = relationship(
+        "User",
+        remote_side=[id],
+        back_populates="subordinates",
+        foreign_keys=[supervisor_id],
+    )
+    subordinates: Mapped[list["User"]] = relationship(
+        "User",
+        back_populates="supervisor",
+        foreign_keys="[User.supervisor_id]",
     )
 
     @property

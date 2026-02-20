@@ -1,7 +1,7 @@
 """User repository for database operations."""
 
-from typing import Optional, Sequence
-from sqlalchemy import select, func
+from typing import Optional, Sequence, List, Dict, Any
+from sqlalchemy import select, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -40,6 +40,20 @@ class UserRepository(BaseRepository[User]):
             select(User)
             .where(User.id == user_id)
             .options(selectinload(User.roles))
+        )
+        result = await self.session.execute(query)
+        return result.scalar_one_or_none()
+
+    async def get_with_hierarchy(self, user_id: str) -> Optional[User]:
+        """Get user with roles, supervisor and subordinates loaded."""
+        query = (
+            select(User)
+            .where(User.id == user_id)
+            .options(
+                selectinload(User.roles),
+                selectinload(User.supervisor),
+                selectinload(User.subordinates),
+            )
         )
         result = await self.session.execute(query)
         return result.scalar_one_or_none()
@@ -164,6 +178,256 @@ class UserRepository(BaseRepository[User]):
         )
         result = await self.session.execute(query)
         return result.scalar_one_or_none()
+
+    # ========================================================================
+    # Organizational Hierarchy Methods
+    # ========================================================================
+
+    async def get_subordinates(
+        self, 
+        user_id: str, 
+        direct_only: bool = True,
+        include_roles: bool = False,
+    ) -> Sequence[User]:
+        """Get subordinates of a user.
+        
+        Args:
+            user_id: The supervisor's user ID
+            direct_only: If True, only return direct reports. If False, recursively get all.
+            include_roles: If True, eagerly load roles for each user.
+        
+        Returns:
+            List of subordinate users.
+        """
+        if direct_only:
+            query = select(User).where(User.supervisor_id == user_id)
+            if include_roles:
+                query = query.options(selectinload(User.roles))
+            query = query.order_by(User.first_name)
+            result = await self.session.execute(query)
+            return result.scalars().all()
+        else:
+            # Recursive query to get all subordinates (using CTE)
+            return await self._get_all_subordinates_recursive(user_id, include_roles)
+
+    async def _get_all_subordinates_recursive(
+        self, 
+        user_id: str,
+        include_roles: bool = False,
+        max_depth: int = 10,
+    ) -> List[User]:
+        """Recursively get all subordinates using iteration (to avoid deep recursion).
+        
+        Args:
+            user_id: Starting user ID
+            include_roles: Whether to load roles
+            max_depth: Maximum depth to traverse (safety limit)
+        
+        Returns:
+            List of all subordinates at all levels.
+        """
+        all_subordinates: List[User] = []
+        current_level_ids = [user_id]
+        depth = 0
+        
+        while current_level_ids and depth < max_depth:
+            query = select(User).where(User.supervisor_id.in_(current_level_ids))
+            if include_roles:
+                query = query.options(selectinload(User.roles))
+            result = await self.session.execute(query)
+            level_users = list(result.scalars().all())
+            
+            if not level_users:
+                break
+                
+            all_subordinates.extend(level_users)
+            current_level_ids = [str(u.id) for u in level_users]
+            depth += 1
+        
+        return all_subordinates
+
+    async def get_all_subordinate_ids(self, user_id: str, max_depth: int = 10) -> List[str]:
+        """Get all subordinate user IDs (recursive).
+        
+        Useful for filtering queries by team membership.
+        
+        Args:
+            user_id: Starting user ID
+            max_depth: Maximum depth to traverse
+        
+        Returns:
+            List of all subordinate user IDs.
+        """
+        all_ids: List[str] = []
+        current_level_ids = [user_id]
+        depth = 0
+        
+        while current_level_ids and depth < max_depth:
+            query = select(User.id).where(User.supervisor_id.in_(current_level_ids))
+            result = await self.session.execute(query)
+            level_ids = [str(row[0]) for row in result.fetchall()]
+            
+            if not level_ids:
+                break
+                
+            all_ids.extend(level_ids)
+            current_level_ids = level_ids
+            depth += 1
+        
+        return all_ids
+
+    async def get_team_tree(self, user_id: str, max_depth: int = 5) -> Dict[str, Any]:
+        """Get the complete team tree structure for a user.
+        
+        Args:
+            user_id: The root user ID
+            max_depth: Maximum depth to traverse
+        
+        Returns:
+            Dictionary representing the team tree structure.
+        """
+        user = await self.get_with_roles(user_id)
+        if not user:
+            return {}
+        
+        async def build_tree(u: User, current_depth: int) -> Dict[str, Any]:
+            node = {
+                "id": str(u.id),
+                "name": u.full_name,
+                "email": u.email,
+                "department": u.department,
+                "roles": [r.name for r in u.roles] if u.roles else [],
+                "subordinates": [],
+            }
+            
+            if current_depth < max_depth:
+                direct_subs = await self.get_subordinates(str(u.id), direct_only=True, include_roles=True)
+                for sub in direct_subs:
+                    sub_tree = await build_tree(sub, current_depth + 1)
+                    node["subordinates"].append(sub_tree)
+            
+            return node
+        
+        return await build_tree(user, 0)
+
+    async def update_supervisor(
+        self, 
+        user_id: str, 
+        supervisor_id: Optional[str],
+    ) -> User:
+        """Update a user's supervisor.
+        
+        Args:
+            user_id: The user to update
+            supervisor_id: The new supervisor ID (None to remove supervisor)
+        
+        Returns:
+            Updated user.
+        
+        Raises:
+            ValueError: If validation fails.
+        """
+        user = await self.get(user_id)
+        if not user:
+            raise ValueError(f"User {user_id} not found")
+        
+        if supervisor_id:
+            # Validate supervisor assignment
+            is_valid = await self.validate_supervisor_assignment(user_id, supervisor_id)
+            if not is_valid:
+                raise ValueError("Invalid supervisor assignment")
+        
+        user.supervisor_id = supervisor_id
+        await self.session.flush()
+        return user
+
+    async def validate_supervisor_assignment(
+        self, 
+        user_id: str, 
+        supervisor_id: str,
+    ) -> bool:
+        """Validate that a supervisor assignment is valid.
+        
+        Checks:
+        1. Supervisor exists and is in the same tenant
+        2. No circular reference would be created
+        3. User is not assigning themselves as supervisor
+        
+        Args:
+            user_id: The user being assigned a supervisor
+            supervisor_id: The proposed supervisor
+        
+        Returns:
+            True if valid, False otherwise.
+        """
+        if user_id == supervisor_id:
+            return False  # Can't be your own supervisor
+        
+        user = await self.get(user_id)
+        supervisor = await self.get(supervisor_id)
+        
+        if not user or not supervisor:
+            return False
+        
+        # Must be in the same tenant
+        if user.tenant_id != supervisor.tenant_id:
+            return False
+        
+        # Check for circular reference
+        # Walk up the supervisor chain from the proposed supervisor
+        current_id = supervisor_id
+        visited = {user_id}  # Include user_id to detect cycles
+        max_iterations = 20  # Safety limit
+        
+        for _ in range(max_iterations):
+            if current_id in visited:
+                return False  # Circular reference detected
+            
+            visited.add(current_id)
+            
+            current = await self.get(current_id)
+            if not current or not current.supervisor_id:
+                break  # Reached top of chain
+            
+            current_id = current.supervisor_id
+        
+        return True
+
+    async def get_users_by_supervisor(
+        self, 
+        supervisor_id: str,
+        skip: int = 0,
+        limit: int = 100,
+    ) -> Sequence[User]:
+        """Get all users with a specific supervisor."""
+        query = (
+            select(User)
+            .where(User.supervisor_id == supervisor_id)
+            .offset(skip)
+            .limit(limit)
+            .order_by(User.first_name)
+        )
+        result = await self.session.execute(query)
+        return result.scalars().all()
+
+    async def count_subordinates(self, user_id: str, direct_only: bool = True) -> int:
+        """Count subordinates of a user.
+        
+        Args:
+            user_id: The supervisor's user ID
+            direct_only: If True, only count direct reports
+        
+        Returns:
+            Number of subordinates.
+        """
+        if direct_only:
+            query = select(func.count(User.id)).where(User.supervisor_id == user_id)
+            result = await self.session.execute(query)
+            return result.scalar() or 0
+        else:
+            # Count all subordinates recursively
+            all_ids = await self.get_all_subordinate_ids(user_id)
+            return len(all_ids)
 
 
 class RoleRepository(BaseRepository[Role]):

@@ -20,11 +20,11 @@ security = HTTPBearer(auto_error=False)
 PLATFORM_TENANT_ID = "00000000-0000-0000-0000-000000000000"
 
 # Role constants for clarity
-PLATFORM_ROLES = {"super_admin", "platform_admin", "platform_user"}
-PLATFORM_ADMIN_ROLES = {"super_admin", "platform_admin"}
-TENANT_ADMIN_ROLES = {"super_admin", "platform_admin", "tenant_admin"}
-SUPERVISOR_ROLES = {"super_admin", "platform_admin", "tenant_admin", "eam_supervisor"}
-ALL_STAFF_ROLES = {"super_admin", "platform_admin", "tenant_admin", "eam_supervisor", "eam_staff"}
+PLATFORM_ROLES = set(settings.platform_roles)
+PLATFORM_ADMIN_ROLES = set(settings.platform_admin_roles)
+TENANT_ADMIN_ROLES = set(settings.tenant_admin_roles)
+SUPERVISOR_ROLES = set(settings.supervisor_roles)
+ALL_STAFF_ROLES = set(settings.all_staff_roles)
 
 
 async def check_tenant_active(db: AsyncSession, tenant_id: str) -> bool:
@@ -267,15 +267,15 @@ def get_user_role_level(user: dict) -> str:
     """
     roles = set(user.get("roles", []))
     
-    if {"super_admin", "platform_admin"}.intersection(roles):
+    if PLATFORM_ADMIN_ROLES.intersection(roles):
         return "platform_admin"
-    if "platform_user" in roles:
+    if PLATFORM_ROLES.intersection(roles):
         return "platform_user"
-    if "tenant_admin" in roles:
+    if TENANT_ADMIN_ROLES.intersection(roles):
         return "tenant_admin"
-    if "eam_supervisor" in roles:
+    if SUPERVISOR_ROLES.intersection(roles):
         return "eam_supervisor"
-    if "eam_staff" in roles:
+    if ALL_STAFF_ROLES.intersection(roles):
         return "eam_staff"
     return "none"
 

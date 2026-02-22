@@ -8,10 +8,9 @@ from typing import Optional
 from uuid import uuid4
 
 from sqlalchemy import String, ForeignKey, Enum as SQLEnum, DateTime, Text
-from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from src.db.base import Base, TimestampMixin
+from src.db.base import Base, TimestampMixin, UUID
 
 
 class InvitationStatus(str, Enum):

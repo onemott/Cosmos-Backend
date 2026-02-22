@@ -97,7 +97,7 @@ async def list_tasks(
     tasks = result.scalars().all()
     
     # Get total count for pagination
-    count_query = select(func.count(Task.id)).where(
+    count_query = select(func.count()).select_from(Task).where(
         Task.client_id == client_id,
         Task.is_archived == is_archived,
     )
@@ -128,7 +128,7 @@ async def list_tasks(
 
     # Count pending tasks (from non-archived only)
     # We need a separate query for total pending count because pagination filters the results
-    pending_count_query = select(func.count(Task.id)).where(
+    pending_count_query = select(func.count()).select_from(Task).where(
         Task.client_id == client_id,
         Task.workflow_state == WorkflowState.PENDING_CLIENT,
         Task.status == TaskStatus.PENDING,

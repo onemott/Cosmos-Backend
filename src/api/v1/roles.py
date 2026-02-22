@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
+from src.core.config import settings
 from src.db.session import get_db
 from src.models.user import Role
 from src.schemas.role import RoleResponse
@@ -28,7 +29,7 @@ async def list_roles(
     roles = result.scalars().all()
     
     # Check if user is platform admin
-    platform_roles_set = {"super_admin", "platform_admin"}
+    platform_roles_set = set(settings.platform_admin_roles)
     user_roles = set(current_user.get("roles", []))
     is_platform_admin = bool(platform_roles_set.intersection(user_roles)) or current_user.get("is_superuser", False)
     
@@ -38,7 +39,7 @@ async def list_roles(
         return [RoleResponse.model_validate(r) for r in roles]
     else:
         # Tenant admins can only see tenant-level roles
-        tenant_role_names = {"tenant_admin", "tenant_user"}
-        filtered_roles = [r for r in roles if r.name in tenant_role_names]
+        platform_role_names = set(settings.platform_roles)
+        filtered_roles = [r for r in roles if r.name not in platform_role_names]
         return [RoleResponse.model_validate(r) for r in filtered_roles]
 

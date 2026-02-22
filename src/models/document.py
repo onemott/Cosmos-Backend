@@ -4,11 +4,10 @@ from typing import TYPE_CHECKING, Optional
 from uuid import uuid4
 
 from sqlalchemy import String, ForeignKey, Integer, Enum as SQLEnum, CheckConstraint
-from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 import enum
 
-from src.db.base import Base, TimestampMixin
+from src.db.base import Base, TimestampMixin, UUID
 
 if TYPE_CHECKING:
     from src.models.client import Client

@@ -13,10 +13,9 @@ from sqlalchemy import (
     Numeric,
     UniqueConstraint,
 )
-from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from src.db.base import Base, TimestampMixin
+from src.db.base import Base, TimestampMixin, UUID
 
 if TYPE_CHECKING:
     from src.models.tenant import Tenant

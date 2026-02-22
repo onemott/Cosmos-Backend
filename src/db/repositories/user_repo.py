@@ -276,6 +276,10 @@ class UserRepository(BaseRepository[User]):
         
         return all_ids
 
+    async def get_team_scope_user_ids(self, user_id: str, max_depth: int = 10) -> List[str]:
+        subordinates = await self.get_all_subordinate_ids(user_id, max_depth=max_depth)
+        return [user_id] + subordinates
+
     async def get_team_tree(self, user_id: str, max_depth: int = 5) -> Dict[str, Any]:
         """Get the complete team tree structure for a user.
         

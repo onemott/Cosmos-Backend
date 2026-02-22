@@ -1,7 +1,8 @@
 """User management endpoints."""
 
 from typing import List, Optional, Any, Dict
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
+from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,8 +16,10 @@ from src.api.deps import (
     get_supervisor_or_higher,
     is_platform_admin as deps_is_platform_admin,
     is_tenant_admin as deps_is_tenant_admin,
+    get_user_role_level,
 )
 from src.core.config import settings
+from src.services.audit_log_service import enqueue_audit_log, build_request_context
 
 router = APIRouter()
 
@@ -185,6 +188,7 @@ async def list_users(
 @router.post("/", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 async def create_user(
     user_in: UserCreate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_tenant_admin),
 ) -> UserResponse:
@@ -253,6 +257,26 @@ async def create_user(
         # Load roles anyway to return consistent response
         user = await repo.get_with_roles(user.id)
 
+    context = build_request_context(request)
+    enqueue_audit_log(
+        {
+            "tenant_id": str(user.tenant_id),
+            "event_type": "user",
+            "level": "info",
+            "category": "security",
+            "resource_type": "user",
+            "resource_id": user.id,
+            "action": "create",
+            "outcome": "success",
+            "user_id": current_user.get("user_id"),
+            "user_email": current_user.get("email"),
+            "old_value": None,
+            "new_value": jsonable_encoder(user_to_response(user)),
+            "extra_data": {"role_ids": user_in.role_ids or []},
+            **context,
+        }
+    )
+
     return user_to_response(user)
 
 
@@ -288,6 +312,7 @@ async def get_user(
 async def update_user(
     user_id: str,
     user_in: UserUpdate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_tenant_admin),
 ) -> UserResponse:
@@ -300,6 +325,9 @@ async def update_user(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found",
         )
+
+    old_user = await repo.get_with_roles(user_id)
+    old_snapshot = jsonable_encoder(user_to_response(old_user or user))
 
     # Check access - only platform admins can update users in other tenants
     if not is_platform_admin(current_user) and str(user.tenant_id) != current_user.get(
@@ -337,17 +365,42 @@ async def update_user(
                     )
 
         user = await repo.assign_roles(str(user.id), user_in.role_ids)
+        updated_user = user
     else:
         # Load roles anyway to return consistent response
         await db.commit()  # Commit the update
-        user = await repo.get_with_roles(str(user.id))
+        updated_user = await repo.get_with_roles(str(user.id))
 
-    return user_to_response(user)
+    context = build_request_context(request)
+    enqueue_audit_log(
+        {
+            "tenant_id": str(user.tenant_id),
+            "event_type": "user",
+            "level": "info",
+            "category": "security",
+            "resource_type": "user",
+            "resource_id": str(user.id),
+            "action": "update",
+            "outcome": "success",
+            "user_id": current_user.get("user_id"),
+            "user_email": current_user.get("email"),
+            "old_value": old_snapshot,
+            "new_value": jsonable_encoder(user_to_response(updated_user)),
+            "extra_data": {
+                "updated_fields": list(update_data.keys()),
+                "role_ids": user_in.role_ids,
+            },
+            **context,
+        }
+    )
+
+    return user_to_response(updated_user)
 
 
 @router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def deactivate_user(
     user_id: str,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_tenant_admin),
 ) -> None:
@@ -377,13 +430,36 @@ async def deactivate_user(
             detail="Cannot deactivate your own account",
         )
 
-    # Soft delete
+    old_snapshot = jsonable_encoder(user_to_response(await repo.get_with_roles(user_id) or user))
+
     await repo.update(user, {"is_active": False})
+    await db.commit()
+    updated_user = await repo.get_with_roles(user_id)
+
+    context = build_request_context(request)
+    enqueue_audit_log(
+        {
+            "tenant_id": str(user.tenant_id),
+            "event_type": "user",
+            "level": "warn",
+            "category": "security",
+            "resource_type": "user",
+            "resource_id": str(user.id),
+            "action": "deactivate",
+            "outcome": "success",
+            "user_id": current_user.get("user_id"),
+            "user_email": current_user.get("email"),
+            "old_value": old_snapshot,
+            "new_value": jsonable_encoder(user_to_response(updated_user)),
+            **context,
+        }
+    )
 
 
 @router.delete("/{user_id}/permanent", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_user_permanent(
     user_id: str,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(get_current_tenant_admin),
 ) -> None:
@@ -424,7 +500,28 @@ async def delete_user_permanent(
         )
 
     # Hard delete
+    old_snapshot = jsonable_encoder(user_to_response(await repo.get_with_roles(user_id) or user))
     await repo.delete(user)
+    await db.commit()
+
+    context = build_request_context(request)
+    enqueue_audit_log(
+        {
+            "tenant_id": str(user.tenant_id),
+            "event_type": "user",
+            "level": "warn",
+            "category": "security",
+            "resource_type": "user",
+            "resource_id": str(user.id),
+            "action": "delete",
+            "outcome": "success",
+            "user_id": current_user.get("user_id"),
+            "user_email": current_user.get("email"),
+            "old_value": old_snapshot,
+            "new_value": None,
+            **context,
+        }
+    )
 
 
 @router.post("/{user_id}/change-password", status_code=status.HTTP_200_OK)
@@ -560,7 +657,7 @@ async def get_user_team_tree(
     # Access check
     is_self = user_id == current_user.get("user_id")
     is_same_tenant = str(user.tenant_id) == current_user.get("tenant_id")
-    is_admin = deps_is_tenant_admin(current_user)
+    role_level = get_user_role_level(current_user)
     
     if not is_same_tenant:
         raise HTTPException(
@@ -568,11 +665,21 @@ async def get_user_team_tree(
             detail="Access denied",
         )
     
-    if not is_self and not is_admin:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied - only tenant admins can view other users' team trees",
-        )
+    if not is_self:
+        if role_level in {"tenant_admin", "platform_admin"}:
+            pass
+        elif role_level == "eam_supervisor":
+            all_subordinate_ids = await repo.get_all_subordinate_ids(current_user.get("user_id"))
+            if user_id not in all_subordinate_ids:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Access denied",
+                )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied",
+            )
     
     tree = await repo.get_team_tree(user_id, max_depth=max_depth)
     return tree

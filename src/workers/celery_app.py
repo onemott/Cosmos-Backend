@@ -32,5 +32,9 @@ celery_app.conf.beat_schedule = {
         "task": "src.workers.sync_tasks.sync_all_bank_connections",
         "schedule": 86400.0,  # Every 24 hours
     },
+    "archive-audit-logs-daily": {
+        "task": "src.workers.sync_tasks.archive_audit_logs",
+        "schedule": 86400.0,
+    },
 }
 

@@ -55,6 +55,15 @@ class Settings(BaseSettings):
     # Logging
     log_level: str = "INFO"
     log_format: str = "json"
+    audit_log_archive_after_days: int = 30
+    audit_log_retention_days: int = 365
+    audit_log_archive_batch_size: int = 5000
+
+    platform_roles: List[str] = ["super_admin", "platform_admin", "platform_user"]
+    platform_admin_roles: List[str] = ["super_admin", "platform_admin"]
+    tenant_admin_roles: List[str] = ["super_admin", "platform_admin", "tenant_admin"]
+    supervisor_roles: List[str] = ["super_admin", "platform_admin", "tenant_admin", "eam_supervisor"]
+    all_staff_roles: List[str] = ["super_admin", "platform_admin", "tenant_admin", "eam_supervisor", "eam_staff"]
 
     @property
     def is_production(self) -> bool:

@@ -3,7 +3,8 @@
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import DateTime, func
+from sqlalchemy import DateTime, String, func
+from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -16,6 +17,10 @@ class Base(DeclarativeBase):
     def to_dict(self) -> dict:
         """Convert model to dictionary."""
         return {c.name: getattr(self, c.name) for c in self.__table__.columns}
+
+
+def UUID(*args: Any, **kwargs: Any) -> PGUUID:
+    return PGUUID(*args, **kwargs).with_variant(String(36), "sqlite")
 
 
 class TimestampMixin:

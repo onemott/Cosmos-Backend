@@ -11,7 +11,9 @@ Usage:
     python scripts/seed_role_accounts.py
 """
 
+import argparse
 import asyncio
+from decimal import Decimal
 import sys
 from pathlib import Path
 from uuid import uuid4
@@ -21,6 +23,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from sqlalchemy import select
 from src.db.session import async_session_factory
+from src.models.account import Account, AccountType
+from src.models.audit_log import AuditLog
+from src.models.client import Client, ClientType, KYCStatus, RiskProfile
 from src.models.user import User, Role
 from src.models.tenant import Tenant
 from src.core.security import hash_password
@@ -104,29 +109,30 @@ async def get_platform_tenant(session):
 
 async def get_test_tenant(session):
     """Get or create a test EAM tenant."""
-    # Try to find existing test tenant
-    query = select(Tenant).where(Tenant.slug.like('%test%'))
+    query = select(Tenant).where(Tenant.slug.in_(["test-firm", "test-firm-role-demo"]))
     result = await session.execute(query)
-    tenants = result.scalars().all()
-    
-    if tenants:
-        # Use the first test tenant found
-        tenant = tenants[0]
+    tenant = result.scalar_one_or_none()
+
+    if not tenant:
+        fallback_query = select(Tenant).where(Tenant.slug.like("%test%"))
+        fallback_result = await session.execute(fallback_query)
+        tenant = fallback_result.scalars().first()
+
+    if tenant:
         print(f"✅ Using existing test tenant: {tenant.name}")
-    else:
-        # Create test tenant
-        tenant = Tenant(
-            id=str(uuid4()),
-            name="Test EAM Firm",
-            slug="test-firm-role-demo",
-            contact_email="contact@test-firm.com",
-            is_active=True,
-            settings={"description": "Test tenant for role hierarchy demonstration"}
-        )
-        session.add(tenant)
-        await session.flush()
-        print(f"✅ Created test tenant: {tenant.name}")
-    
+        return tenant
+
+    tenant = Tenant(
+        id=str(uuid4()),
+        name="Test EAM Firm",
+        slug="test-firm",
+        contact_email="contact@test-firm.com",
+        is_active=True,
+        settings={"description": "Test tenant for role hierarchy demonstration"},
+    )
+    session.add(tenant)
+    await session.flush()
+    print(f"✅ Created test tenant: {tenant.name}")
     return tenant
 
 
@@ -218,6 +224,164 @@ async def create_user_with_role(session, role_name, user_data, tenant):
     return user
 
 
+async def get_user_by_email(session, email: str) -> User | None:
+    query = select(User).where(User.email == email)
+    result = await session.execute(query)
+    return result.scalar_one_or_none()
+
+
+async def get_client_by_email(session, email: str) -> Client | None:
+    query = select(Client).where(Client.email == email)
+    result = await session.execute(query)
+    return result.scalar_one_or_none()
+
+
+async def seed_team_clients(session, tenant: Tenant, users_by_role: dict[str, User]) -> None:
+    demo_clients = [
+        {
+            "email": "delta.admin@testfirm.com",
+            "first_name": "Delta",
+            "last_name": "AdminClient",
+            "assigned_role": "tenant_admin",
+            "risk_profile": RiskProfile.BALANCED,
+            "total_value": Decimal("2000000"),
+        },
+        {
+            "email": "alpha.supervisor@testfirm.com",
+            "first_name": "Alpha",
+            "last_name": "SupervisorClient",
+            "assigned_role": "eam_supervisor",
+            "risk_profile": RiskProfile.GROWTH,
+            "total_value": Decimal("1200000"),
+        },
+        {
+            "email": "beta.supervisor@testfirm.com",
+            "first_name": "Beta",
+            "last_name": "SupervisorClient",
+            "assigned_role": "eam_supervisor",
+            "risk_profile": RiskProfile.MODERATE,
+            "total_value": Decimal("850000"),
+        },
+        {
+            "email": "gamma.staff@testfirm.com",
+            "first_name": "Gamma",
+            "last_name": "StaffClient",
+            "assigned_role": "eam_staff",
+            "risk_profile": RiskProfile.CONSERVATIVE,
+            "total_value": Decimal("300000"),
+        },
+    ]
+
+    tenant_admin = users_by_role.get("tenant_admin")
+
+    for client_data in demo_clients:
+        assigned_user = users_by_role.get(client_data["assigned_role"])
+        if not assigned_user:
+            print(f"  ⚠️  Missing user for role {client_data['assigned_role']}, skipping client")
+            continue
+
+        existing_client = await get_client_by_email(session, client_data["email"])
+        if existing_client:
+            existing_client.assigned_to_user_id = assigned_user.id
+            if tenant_admin:
+                existing_client.created_by_user_id = tenant_admin.id
+            print(f"  ⚠️  Client {client_data['email']} already exists, updating assignment...")
+            client = existing_client
+        else:
+            client = Client(
+                id=str(uuid4()),
+                tenant_id=tenant.id,
+                client_type=ClientType.INDIVIDUAL,
+                first_name=client_data["first_name"],
+                last_name=client_data["last_name"],
+                email=client_data["email"],
+                kyc_status=KYCStatus.APPROVED,
+                risk_profile=client_data["risk_profile"],
+                assigned_to_user_id=assigned_user.id,
+                created_by_user_id=tenant_admin.id if tenant_admin else assigned_user.id,
+            )
+            session.add(client)
+            await session.flush()
+            print(f"  👥 Created demo client: {client.email} -> {assigned_user.email}")
+
+        account_name = f"{client.first_name} {client.last_name} Portfolio"
+        account_result = await session.execute(
+            select(Account).where(
+                Account.client_id == client.id,
+                Account.account_name == account_name,
+            )
+        )
+        existing_account = account_result.scalar_one_or_none()
+        if existing_account:
+            existing_account.total_value = client_data["total_value"]
+            existing_account.cash_balance = (
+                client_data["total_value"] * Decimal("0.1")
+            ).quantize(Decimal("0.01"))
+        else:
+            account = Account(
+                id=str(uuid4()),
+                tenant_id=tenant.id,
+                client_id=client.id,
+                account_number=f"DEMO-{uuid4().hex[:10]}",
+                account_name=account_name,
+                account_type=AccountType.INVESTMENT,
+                currency="USD",
+                total_value=client_data["total_value"],
+                cash_balance=(client_data["total_value"] * Decimal("0.1")).quantize(Decimal("0.01")),
+            )
+            session.add(account)
+
+
+async def seed_audit_logs(
+    session,
+    tenant: Tenant,
+    user: User | None,
+    event_source: str,
+) -> None:
+    existing = await session.execute(
+        select(AuditLog).where(
+            AuditLog.request_id == "demo-seed",
+            AuditLog.tenant_id == tenant.id,
+            AuditLog.event_type.like(f"{event_source}.%"),
+        )
+    )
+    if existing.scalar_one_or_none():
+        print("  ⚠️  Demo audit logs already exist, skipping...")
+        return
+
+    user_id = str(user.id) if user else None
+    user_email = user.email if user else None
+
+    events = [
+        ("auth.login", "security", "session", "login", "success"),
+        ("team.view", "analytics", "team", "read", "success"),
+        ("client.create", "client", "client", "create", "success"),
+        ("client.assign", "client", "client", "assign", "success"),
+        ("user.update", "user", "user", "update", "success"),
+        ("audit.export", "security", "audit_log", "export", "success"),
+    ]
+
+    for event_type, category, resource_type, action, outcome in events:
+        log = AuditLog(
+            tenant_id=tenant.id,
+            event_type=f"{event_source}.{event_type}",
+            level="info",
+            category=category,
+            resource_type=resource_type,
+            resource_id=None,
+            action=action,
+            outcome=outcome,
+            user_id=user_id,
+            user_email=user_email,
+            ip_address="127.0.0.1",
+            user_agent="seed-script",
+            request_id="demo-seed",
+            extra_data={"seeded": True, "source": event_source},
+            tags=["demo_seed"],
+        )
+        session.add(log)
+
+
 async def seed_role_accounts():
     """Main seed function."""
     print("=" * 60)
@@ -238,6 +402,7 @@ async def seed_role_accounts():
             print(f"🏢 Test EAM Tenant: {test_tenant.name}")
             
             created_users = []
+            users_by_role: dict[str, User] = {}
             
             # Create users for each role
             for role_name, user_data in TEST_USERS.items():
@@ -260,6 +425,11 @@ async def seed_role_accounts():
                         "tenant": tenant.name,
                         "name": f"{user_data['first_name']} {user_data['last_name']}"
                     })
+                    users_by_role[role_name] = user
+
+            await seed_team_clients(session, test_tenant, users_by_role)
+            await seed_audit_logs(session, test_tenant, users_by_role.get("tenant_admin"), "tenant")
+            await seed_audit_logs(session, platform_tenant, users_by_role.get("platform_admin"), "platform")
             
             await session.commit()
             
@@ -311,6 +481,8 @@ async def seed_role_accounts():
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Seed role accounts and demo data")
+    parser.parse_args()
     print("🚀 Starting Role Account Seeding...")
     print("")
     asyncio.run(seed_role_accounts())

@@ -5,12 +5,11 @@ from uuid import uuid4
 from decimal import Decimal
 
 from sqlalchemy import String, ForeignKey, Numeric, Enum as SQLEnum, Date
-from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 import enum
 from datetime import date
 
-from src.db.base import Base, TimestampMixin
+from src.db.base import Base, TimestampMixin, UUID
 
 if TYPE_CHECKING:
     from src.models.account import Account

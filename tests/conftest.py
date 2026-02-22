@@ -15,7 +15,7 @@ TEST_DATABASE_URL = "sqlite+aiosqlite:///./test.db"
 @pytest_asyncio.fixture
 async def async_engine():
     """Create async test engine."""
-    engine = create_async_engine(TEST_DATABASE_URL, echo=True)
+    engine = create_async_engine(TEST_DATABASE_URL, echo=False)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)

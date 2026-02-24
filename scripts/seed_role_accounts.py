@@ -345,7 +345,7 @@ async def seed_audit_logs(
             AuditLog.event_type.like(f"{event_source}.%"),
         )
     )
-    if existing.scalar_one_or_none():
+    if existing.scalars().first():
         print("  ⚠️  Demo audit logs already exist, skipping...")
         return
 

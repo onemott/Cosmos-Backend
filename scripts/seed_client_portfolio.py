@@ -168,7 +168,7 @@ async def seed_instruments(db: AsyncSession) -> list[Instrument]:
         result = await db.execute(
             select(Instrument).where(Instrument.ticker == inst_data["ticker"])
         )
-        instrument = result.scalar_one_or_none()
+        instrument = result.scalars().first()
         
         if not instrument:
             instrument = Instrument(

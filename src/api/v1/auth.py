@@ -64,7 +64,7 @@ async def login(
             )
         
         # Check if user's tenant is active
-        if not await check_tenant_active(db, str(user.tenant_id)):
+        if user.tenant_id and not await check_tenant_active(db, str(user.tenant_id)):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Your organization's account has been deactivated. Please contact support.",
@@ -142,7 +142,7 @@ async def refresh_token(
             detail="User account is disabled",
         )
     
-    if not await check_tenant_active(db, str(user.tenant_id)):
+    if user.tenant_id and not await check_tenant_active(db, str(user.tenant_id)):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Your organization's account has been deactivated. Please contact support.",

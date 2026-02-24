@@ -165,7 +165,7 @@ async def main():
             existing_result = await db.execute(
                 select(Document).where(Document.client_id == client.id).limit(1)
             )
-            if existing_result.scalar_one_or_none():
+            if existing_result.scalars().first():
                 print(f"  Documents already exist, skipping...")
                 continue
             

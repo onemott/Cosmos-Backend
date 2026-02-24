@@ -9,6 +9,7 @@ Usage:
 """
 
 import asyncio
+import argparse
 import random
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
@@ -18,7 +19,7 @@ import os
 # Add src to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.db.session import async_session_factory
@@ -100,19 +101,14 @@ async def seed_tasks_for_client(
     client: Client,
     tenant_id: str,
 ) -> list[Task]:
-    """Create test tasks for a client."""
+    """Create test tasks covering all task types for a client."""
     tasks = []
+    now = datetime.now(timezone.utc)
     
-    # Create 2-3 proposal approval tasks
-    num_proposals = random.randint(2, 3)
-    selected_proposals = random.sample(SAMPLE_PROPOSALS, min(num_proposals, len(SAMPLE_PROPOSALS)))
-    
-    for i, proposal in enumerate(selected_proposals):
-        # Vary the due dates and priorities
-        due_date = datetime.now(timezone.utc) + timedelta(days=random.randint(3, 14))
-        priority = random.choice([TaskPriority.HIGH, TaskPriority.MEDIUM, TaskPriority.URGENT])
-        
-        task = Task(
+    proposal = random.choice(SAMPLE_PROPOSALS)
+    due_date = now + timedelta(days=7)
+    tasks.append(
+        Task(
             id=str(uuid4()),
             tenant_id=tenant_id,
             client_id=client.id,
@@ -120,69 +116,245 @@ async def seed_tasks_for_client(
             description=proposal["description"],
             task_type=TaskType.PROPOSAL_APPROVAL,
             status=TaskStatus.PENDING,
-            priority=priority,
+            priority=TaskPriority.HIGH,
             due_date=due_date,
             workflow_state=WorkflowState.PENDING_CLIENT,
             approval_required_by=due_date,
-            proposal_data=proposal.get("proposal_data"),
+            proposal_data={
+                **proposal.get("proposal_data", {}),
+                "eam_message": "We recommend reviewing the proposal highlights before approval.",
+                "sent_to_client_at": now.isoformat(),
+            },
         )
-        db.add(task)
-        tasks.append(task)
-    
-    # Create 1-2 general tasks
-    num_general = random.randint(1, 2)
-    selected_general = random.sample(GENERAL_TASKS, min(num_general, len(GENERAL_TASKS)))
-    
-    for task_data in selected_general:
-        due_date = datetime.now(timezone.utc) + timedelta(days=random.randint(7, 30))
-        
-        task = Task(
+    )
+
+    tasks.append(
+        Task(
             id=str(uuid4()),
             tenant_id=tenant_id,
             client_id=client.id,
-            title=task_data["title"],
-            description=task_data["description"],
-            task_type=task_data["task_type"],
+            title="Product Request: Diversified Growth Portfolio",
+            description="Client requested a diversified growth allocation.",
+            task_type=TaskType.PRODUCT_REQUEST,
             status=TaskStatus.PENDING,
             priority=TaskPriority.MEDIUM,
-            due_date=due_date,
-            workflow_state=WorkflowState.PENDING_CLIENT,
-            approval_required_by=due_date,
+            workflow_state=WorkflowState.PENDING_EAM,
+            proposal_data={
+                "orders": [
+                    {
+                        "product_id": str(uuid4()),
+                        "product_name": "Diversified Growth Portfolio",
+                        "module_code": "custom_portfolio",
+                        "min_investment": 100000,
+                        "requested_amount": 125000,
+                        "currency": "USD",
+                    },
+                    {
+                        "product_id": str(uuid4()),
+                        "product_name": "Capital Preservation Portfolio",
+                        "module_code": "custom_portfolio",
+                        "min_investment": 25000,
+                        "requested_amount": 25000,
+                        "currency": "USD",
+                    },
+                ],
+                "total_min_investment": 125000,
+                "total_requested_amount": 150000,
+                "client_notes": "Please prioritize capital preservation options.",
+                "submitted_at": now.isoformat(),
+            },
         )
-        db.add(task)
-        tasks.append(task)
-    
-    # Create 1 already-completed task for history
-    completed_task = Task(
-        id=str(uuid4()),
-        tenant_id=tenant_id,
-        client_id=client.id,
-        title="Q4 2024 Portfolio Review - Approved",
-        description="Quarterly portfolio review and rebalancing proposal.",
-        task_type=TaskType.PROPOSAL_APPROVAL,
-        status=TaskStatus.COMPLETED,
-        priority=TaskPriority.MEDIUM,
-        due_date=datetime.now(timezone.utc) - timedelta(days=30),
-        completed_at=datetime.now(timezone.utc) - timedelta(days=28),
-        workflow_state=WorkflowState.APPROVED,
     )
-    db.add(completed_task)
-    tasks.append(completed_task)
+
+    tasks.append(
+        Task(
+            id=str(uuid4()),
+            tenant_id=tenant_id,
+            client_id=client.id,
+            title="Lightweight Interest: Balanced Strategy",
+            description="Client expressed interest in a balanced strategy product.",
+            task_type=TaskType.LIGHTWEIGHT_INTEREST,
+            status=TaskStatus.PENDING,
+            priority=TaskPriority.MEDIUM,
+            workflow_state=WorkflowState.PENDING_EAM,
+            proposal_data={
+                "product_id": str(uuid4()),
+                "product_name": "Balanced Strategy",
+                "module_code": "custom_portfolio",
+                "interest_type": "consult",
+                "client_notes": "Interested in the risk profile.",
+                "submitted_at": now.isoformat(),
+            },
+        )
+    )
+
+    tasks.append(
+        Task(
+            id=str(uuid4()),
+            tenant_id=tenant_id,
+            client_id=client.id,
+            title="Onboarding Checklist",
+            description="Complete onboarding checklist items.",
+            task_type=TaskType.ONBOARDING,
+            status=TaskStatus.PENDING,
+            priority=TaskPriority.MEDIUM,
+            due_date=now + timedelta(days=10),
+            workflow_state=WorkflowState.PENDING_CLIENT,
+            approval_required_by=now + timedelta(days=10),
+            proposal_data={
+                "checklist": ["Verify identity", "Confirm risk profile", "Upload address proof"],
+                "submitted_at": now.isoformat(),
+            },
+        )
+    )
+
+    tasks.append(
+        Task(
+            id=str(uuid4()),
+            tenant_id=tenant_id,
+            client_id=client.id,
+            title="KYC Review Update",
+            description="Please review and confirm your KYC information.",
+            task_type=TaskType.KYC_REVIEW,
+            status=TaskStatus.PENDING,
+            priority=TaskPriority.HIGH,
+            due_date=now + timedelta(days=14),
+            workflow_state=WorkflowState.PENDING_CLIENT,
+            approval_required_by=now + timedelta(days=14),
+            proposal_data={
+                "risk_level": "medium",
+                "documents": ["Passport", "Proof of Address"],
+                "submitted_at": now.isoformat(),
+            },
+        )
+    )
+
+    tasks.append(
+        Task(
+            id=str(uuid4()),
+            tenant_id=tenant_id,
+            client_id=client.id,
+            title="Document Review: Updated Agreement",
+            description="Please review and sign the updated agreement.",
+            task_type=TaskType.DOCUMENT_REVIEW,
+            status=TaskStatus.PENDING,
+            priority=TaskPriority.MEDIUM,
+            due_date=now + timedelta(days=20),
+            workflow_state=WorkflowState.PENDING_CLIENT,
+            approval_required_by=now + timedelta(days=20),
+            proposal_data={
+                "documents": ["Investment Agreement v2"],
+                "submitted_at": now.isoformat(),
+            },
+        )
+    )
+
+    tasks.append(
+        Task(
+            id=str(uuid4()),
+            tenant_id=tenant_id,
+            client_id=client.id,
+            title="Compliance Check",
+            description="Compliance verification required for recent account activity.",
+            task_type=TaskType.COMPLIANCE_CHECK,
+            status=TaskStatus.PENDING,
+            priority=TaskPriority.MEDIUM,
+            due_date=now + timedelta(days=12),
+            workflow_state=WorkflowState.PENDING_CLIENT,
+            approval_required_by=now + timedelta(days=12),
+            proposal_data={
+                "checklist": ["Source of funds confirmation", "Tax residency confirmation"],
+                "submitted_at": now.isoformat(),
+            },
+        )
+    )
+
+    tasks.append(
+        Task(
+            id=str(uuid4()),
+            tenant_id=tenant_id,
+            client_id=client.id,
+            title="Risk Review",
+            description="Risk profile review required for upcoming allocation changes.",
+            task_type=TaskType.RISK_REVIEW,
+            status=TaskStatus.PENDING,
+            priority=TaskPriority.MEDIUM,
+            due_date=now + timedelta(days=18),
+            workflow_state=WorkflowState.PENDING_CLIENT,
+            approval_required_by=now + timedelta(days=18),
+            proposal_data={
+                "risk_level": "balanced",
+                "notes": "Please confirm your risk tolerance.",
+                "submitted_at": now.isoformat(),
+            },
+        )
+    )
+
+    tasks.append(
+        Task(
+            id=str(uuid4()),
+            tenant_id=tenant_id,
+            client_id=client.id,
+            title="Account Opening Requirements",
+            description="Provide required documents to open the new account.",
+            task_type=TaskType.ACCOUNT_OPENING,
+            status=TaskStatus.PENDING,
+            priority=TaskPriority.MEDIUM,
+            due_date=now + timedelta(days=25),
+            workflow_state=WorkflowState.PENDING_CLIENT,
+            approval_required_by=now + timedelta(days=25),
+            proposal_data={
+                "account_type": "Managed Portfolio",
+                "documents": ["Signed forms", "Tax ID"],
+                "submitted_at": now.isoformat(),
+            },
+        )
+    )
+
+    tasks.append(
+        Task(
+            id=str(uuid4()),
+            tenant_id=tenant_id,
+            client_id=client.id,
+            title="General Follow-up",
+            description="Advisor follow-up request.",
+            task_type=TaskType.GENERAL,
+            status=TaskStatus.PENDING,
+            priority=TaskPriority.LOW,
+            workflow_state=WorkflowState.PENDING_CLIENT,
+            approval_required_by=now + timedelta(days=30),
+            proposal_data={
+                "notes": "Please share your preferred follow-up time.",
+                "submitted_at": now.isoformat(),
+            },
+        )
+    )
+
+    for task in tasks:
+        db.add(task)
     
     return tasks
 
 
 async def main():
     """Main seed function."""
+    parser = argparse.ArgumentParser(description="Seed client tasks")
+    parser.add_argument("--email", help="Only seed tasks for a specific client email")
+    parser.add_argument("--reset", action="store_true", help="Delete existing tasks before seeding")
+    args = parser.parse_args()
+
     print("=" * 60)
     print("Client Tasks Seed Script")
     print("=" * 60)
     
     async with async_session_factory() as db:
-        # Get all client users (created by portfolio seed script)
-        result = await db.execute(
-            select(ClientUser).options()
-        )
+        if args.email:
+            result = await db.execute(
+                select(ClientUser).where(ClientUser.email == args.email)
+            )
+        else:
+            result = await db.execute(select(ClientUser).options())
+
         client_users = result.scalars().all()
         
         if not client_users:
@@ -203,13 +375,9 @@ async def main():
             
             print(f"\nSeeding tasks for: {client.display_name} ({client_user.email})")
             
-            # Check if tasks already exist for this client
-            existing_result = await db.execute(
-                select(Task).where(Task.client_id == client.id).limit(1)
-            )
-            if existing_result.scalar_one_or_none():
-                print(f"  Tasks already exist, skipping...")
-                continue
+            if args.reset:
+                print("  Clearing existing tasks...")
+                await db.execute(delete(Task).where(Task.client_id == client.id))
             
             tasks = await seed_tasks_for_client(db, client, client_user.tenant_id)
             print(f"  Created {len(tasks)} tasks")

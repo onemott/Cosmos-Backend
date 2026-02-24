@@ -9,8 +9,17 @@ from sqlalchemy.orm import selectinload
 
 from src.db.session import get_db
 from src.api.deps import get_current_user, get_current_tenant_admin
-from src.models.task import Task, TaskType, TaskStatus, WorkflowState, TaskPriority
+from src.models.task import (
+    Task,
+    TaskType,
+    TaskStatus,
+    WorkflowState,
+    TaskPriority,
+    TaskMessage,
+    TaskMessageAuthorType,
+)
 from src.models.client import Client
+from src.models.client_user import ClientUser
 from src.models.user import User
 from src.schemas.task import (
     TaskCreate,
@@ -22,6 +31,9 @@ from src.schemas.task import (
     TaskActionResponse,
     ClientSummary,
     UserSummary,
+    TaskMessageCreate,
+    TaskMessageResponse,
+    TaskMessageListResponse,
 )
 
 router = APIRouter()
@@ -124,6 +136,9 @@ def build_task_response(
         created_by=created_by_summary,
         due_date=task.due_date,
         completed_at=task.completed_at,
+        escalation_level=task.escalation_level or 0,
+        escalated_at=task.escalated_at,
+        escalated_to_id=task.escalated_to_id,
         workflow_state=task.workflow_state.value if task.workflow_state else None,
         approval_required_by=task.approval_required_by,
         approval_action=task.approval_action.value if task.approval_action else None,
@@ -134,6 +149,87 @@ def build_task_response(
         created_at=task.created_at,
         updated_at=task.updated_at,
     )
+
+
+async def create_task_message(
+    db: AsyncSession,
+    task: Task,
+    author_type: TaskMessageAuthorType,
+    body: str,
+    author_user_id: Optional[str] = None,
+    author_client_user_id: Optional[str] = None,
+    reply_to_id: Optional[str] = None,
+) -> TaskMessage:
+    max_version_result = await db.execute(
+        select(func.max(TaskMessage.version)).where(TaskMessage.task_id == task.id)
+    )
+    version = (max_version_result.scalar() or 0) + 1
+    message = TaskMessage(
+        tenant_id=task.tenant_id,
+        task_id=task.id,
+        client_id=task.client_id,
+        author_type=author_type,
+        author_user_id=author_user_id,
+        author_client_user_id=author_client_user_id,
+        body=body,
+        reply_to_id=reply_to_id,
+        version=version,
+    )
+    db.add(message)
+    await db.flush()
+    return message
+
+
+async def build_task_message_responses(
+    db: AsyncSession,
+    messages: List[TaskMessage],
+) -> List[TaskMessageResponse]:
+    user_ids = {m.author_user_id for m in messages if m.author_user_id}
+    client_user_ids = {m.author_client_user_id for m in messages if m.author_client_user_id}
+
+    users_map = {}
+    if user_ids:
+        users_result = await db.execute(select(User).where(User.id.in_(list(user_ids))))
+        users_map = {str(u.id): u for u in users_result.scalars().all()}
+
+    client_users_map = {}
+    if client_user_ids:
+        client_users_result = await db.execute(
+            select(ClientUser).where(ClientUser.id.in_(list(client_user_ids)))
+        )
+        client_users_map = {str(c.id): c for c in client_users_result.scalars().all()}
+
+    responses = []
+    for message in messages:
+        author_name = None
+        if message.author_type == TaskMessageAuthorType.EAM and message.author_user_id:
+            user = users_map.get(str(message.author_user_id))
+            if user:
+                author_name = user.display_name or user.email
+        elif message.author_type == TaskMessageAuthorType.CLIENT and message.author_client_user_id:
+            client_user = client_users_map.get(str(message.author_client_user_id))
+            if client_user:
+                author_name = client_user.display_name
+        elif message.author_type == TaskMessageAuthorType.SYSTEM:
+            author_name = "系统"
+
+        responses.append(
+            TaskMessageResponse(
+                id=message.id,
+                task_id=message.task_id,
+                tenant_id=message.tenant_id,
+                client_id=message.client_id,
+                author_type=message.author_type.value,
+                author_user_id=message.author_user_id,
+                author_client_user_id=message.author_client_user_id,
+                author_name=author_name,
+                body=message.body,
+                reply_to_id=message.reply_to_id,
+                version=message.version,
+                created_at=message.created_at,
+            )
+        )
+    return responses
 
 
 @router.get("/", response_model=TaskListResponse)
@@ -338,6 +434,94 @@ async def get_task(
         created_user = user_result.scalar_one_or_none()
     
     return build_task_response(task, client, assigned_user, created_user)
+
+
+@router.get("/{task_id}/messages", response_model=TaskMessageListResponse)
+async def list_task_messages(
+    task_id: str,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+) -> TaskMessageListResponse:
+    tenant_id = current_user.get("tenant_id")
+    task_query = select(Task).where(Task.id == task_id)
+    if tenant_id:
+        task_query = task_query.where(Task.tenant_id == tenant_id)
+    task_result = await db.execute(task_query)
+    task = task_result.scalar_one_or_none()
+    if not task:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Task not found",
+        )
+
+    message_query = select(TaskMessage).where(TaskMessage.task_id == task_id)
+    count_result = await db.execute(
+        select(func.count()).select_from(message_query.subquery())
+    )
+    total = count_result.scalar() or 0
+
+    message_query = message_query.order_by(
+        TaskMessage.version.asc(),
+        TaskMessage.created_at.asc(),
+    ).offset(skip).limit(limit)
+    messages_result = await db.execute(message_query)
+    messages = messages_result.scalars().all()
+
+    return TaskMessageListResponse(
+        items=await build_task_message_responses(db, messages),
+        total=total,
+        skip=skip,
+        limit=limit,
+    )
+
+
+@router.post("/{task_id}/messages", response_model=TaskMessageResponse, status_code=status.HTTP_201_CREATED)
+async def create_task_message_endpoint(
+    task_id: str,
+    payload: TaskMessageCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+) -> TaskMessageResponse:
+    tenant_id = current_user.get("tenant_id")
+    task_query = select(Task).where(Task.id == task_id)
+    if tenant_id:
+        task_query = task_query.where(Task.tenant_id == tenant_id)
+    task_result = await db.execute(task_query)
+    task = task_result.scalar_one_or_none()
+    if not task:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Task not found",
+        )
+
+    if payload.reply_to_id:
+        reply_check = await db.execute(
+            select(TaskMessage).where(
+                TaskMessage.id == payload.reply_to_id,
+                TaskMessage.task_id == task_id,
+            )
+        )
+        if not reply_check.scalar_one_or_none():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Reply target not found in this task",
+            )
+
+    author_user_id = current_user.get("sub")
+    message = await create_task_message(
+        db=db,
+        task=task,
+        author_type=TaskMessageAuthorType.EAM,
+        body=payload.body,
+        author_user_id=author_user_id,
+        reply_to_id=payload.reply_to_id,
+    )
+    await db.commit()
+
+    responses = await build_task_message_responses(db, [message])
+    return responses[0]
 
 
 @router.post("/", response_model=TaskResponse, status_code=status.HTTP_201_CREATED)
@@ -551,6 +735,14 @@ async def respond_to_task(
             detail=f"Invalid action: {action}. Valid actions: acknowledge, send_to_client, revise, complete, cancel",
         )
     
+    if request.comment:
+        await create_task_message(
+            db=db,
+            task=task,
+            author_type=TaskMessageAuthorType.EAM,
+            body=request.comment,
+            author_user_id=current_user.get("sub"),
+        )
     await db.commit()
     
     return TaskActionResponse(

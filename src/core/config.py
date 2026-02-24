@@ -59,6 +59,10 @@ class Settings(BaseSettings):
     audit_log_retention_days: int = 365
     audit_log_archive_batch_size: int = 5000
 
+    task_sla_interval_seconds: int = 900
+    task_sla_escalation_cooldown_hours: int = 4
+    task_sla_max_escalation_level: int = 2
+
     platform_roles: List[str] = ["super_admin", "platform_admin", "platform_user"]
     platform_admin_roles: List[str] = ["super_admin", "platform_admin"]
     tenant_admin_roles: List[str] = ["super_admin", "platform_admin", "tenant_admin"]

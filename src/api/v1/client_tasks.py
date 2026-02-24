@@ -9,16 +9,34 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.deps import get_current_client
 from src.db.session import get_db
-from src.models.task import Task, TaskType, TaskStatus, TaskPriority, WorkflowState, ApprovalAction
+from src.models.task import (
+    Task,
+    TaskType,
+    TaskStatus,
+    TaskPriority,
+    WorkflowState,
+    ApprovalAction,
+    TaskMessage,
+    TaskMessageAuthorType,
+)
+from src.models.client import Client
+from src.models.client_user import ClientUser
+from src.models.user import User
 from src.schemas.client_task import (
     ClientTaskSummary,
     ClientTaskDetail,
     ClientTaskList,
     TaskApprovalRequest,
     TaskActionResponse,
+    TaskMessageCreate,
+    TaskMessageResponse,
+    TaskMessageList,
     ProductRequestCreate,
     ProductRequestResponse,
+    LightweightInterestCreate,
+    LightweightInterestResponse,
 )
+from src.workers.notification_tasks import send_push_notification, send_email_notification
 
 router = APIRouter(prefix="/client/tasks", tags=["Client Tasks"])
 
@@ -29,6 +47,137 @@ def task_requires_action(task: Task) -> bool:
         task.workflow_state == WorkflowState.PENDING_CLIENT
         and task.status == TaskStatus.PENDING
     )
+
+
+async def get_client_and_assignee(
+    db: AsyncSession,
+    client_id: str,
+    tenant_id: str,
+) -> tuple[Client, Optional[User]]:
+    result = await db.execute(
+        select(Client).where(
+            Client.id == client_id,
+            Client.tenant_id == tenant_id,
+        )
+    )
+    client = result.scalar_one_or_none()
+    if not client:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Client not found",
+        )
+    
+    assigned_user = None
+    if client.assigned_to_user_id:
+        user_result = await db.execute(
+            select(User).where(User.id == client.assigned_to_user_id)
+        )
+        assigned_user = user_result.scalar_one_or_none()
+    
+    return client, assigned_user
+
+
+def notify_assigned_advisor(
+    assigned_user: Optional[User],
+    title: str,
+    body: str,
+    data: dict,
+) -> None:
+    if not assigned_user:
+        return
+    send_push_notification.delay(
+        user_id=str(assigned_user.id),
+        title=title,
+        body=body,
+        data=data,
+    )
+    if assigned_user.email:
+        send_email_notification.delay(
+            email=assigned_user.email,
+            subject=title,
+            template="client_interest",
+            context={**data, "title": title, "body": body},
+        )
+
+
+async def create_task_message(
+    db: AsyncSession,
+    task: Task,
+    author_type: TaskMessageAuthorType,
+    body: str,
+    author_user_id: Optional[str] = None,
+    author_client_user_id: Optional[str] = None,
+    reply_to_id: Optional[str] = None,
+) -> TaskMessage:
+    max_version_result = await db.execute(
+        select(func.max(TaskMessage.version)).where(TaskMessage.task_id == task.id)
+    )
+    version = (max_version_result.scalar() or 0) + 1
+    message = TaskMessage(
+        tenant_id=task.tenant_id,
+        task_id=task.id,
+        client_id=task.client_id,
+        author_type=author_type,
+        author_user_id=author_user_id,
+        author_client_user_id=author_client_user_id,
+        body=body,
+        reply_to_id=reply_to_id,
+        version=version,
+    )
+    db.add(message)
+    await db.flush()
+    return message
+
+
+async def build_task_message_responses(
+    db: AsyncSession,
+    messages: list[TaskMessage],
+) -> list[TaskMessageResponse]:
+    user_ids = {m.author_user_id for m in messages if m.author_user_id}
+    client_user_ids = {m.author_client_user_id for m in messages if m.author_client_user_id}
+
+    users_map = {}
+    if user_ids:
+        users_result = await db.execute(select(User).where(User.id.in_(list(user_ids))))
+        users_map = {str(u.id): u for u in users_result.scalars().all()}
+
+    client_users_map = {}
+    if client_user_ids:
+        client_users_result = await db.execute(
+            select(ClientUser).where(ClientUser.id.in_(list(client_user_ids)))
+        )
+        client_users_map = {str(c.id): c for c in client_users_result.scalars().all()}
+
+    responses = []
+    for message in messages:
+        author_name = None
+        if message.author_type == TaskMessageAuthorType.EAM and message.author_user_id:
+            user = users_map.get(str(message.author_user_id))
+            if user:
+                author_name = user.display_name or user.email
+        elif message.author_type == TaskMessageAuthorType.CLIENT and message.author_client_user_id:
+            client_user = client_users_map.get(str(message.author_client_user_id))
+            if client_user:
+                author_name = client_user.display_name
+        elif message.author_type == TaskMessageAuthorType.SYSTEM:
+            author_name = "系统"
+
+        responses.append(
+            TaskMessageResponse(
+                id=message.id,
+                task_id=message.task_id,
+                client_id=message.client_id,
+                author_type=message.author_type.value,
+                author_user_id=message.author_user_id,
+                author_client_user_id=message.author_client_user_id,
+                author_name=author_name,
+                body=message.body,
+                reply_to_id=message.reply_to_id,
+                version=message.version,
+                created_at=message.created_at,
+            )
+        )
+    return responses
 
 
 @router.get(
@@ -206,6 +355,109 @@ async def get_task_detail(
     )
 
 
+@router.get(
+    "/{task_id}/messages",
+    response_model=TaskMessageList,
+    summary="List task messages",
+    description="Get communication messages for a task.",
+)
+async def list_task_messages(
+    task_id: str,
+    current_client: dict = Depends(get_current_client),
+    db: AsyncSession = Depends(get_db),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+) -> TaskMessageList:
+    client_id = current_client["client_id"]
+    task_result = await db.execute(
+        select(Task).where(
+            Task.id == task_id,
+            Task.client_id == client_id,
+        )
+    )
+    task = task_result.scalar_one_or_none()
+    if not task:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Task not found",
+        )
+
+    message_query = select(TaskMessage).where(TaskMessage.task_id == task_id)
+    count_result = await db.execute(
+        select(func.count()).select_from(message_query.subquery())
+    )
+    total = count_result.scalar() or 0
+
+    message_query = message_query.order_by(
+        TaskMessage.version.asc(),
+        TaskMessage.created_at.asc(),
+    ).offset(skip).limit(limit)
+    messages_result = await db.execute(message_query)
+    messages = messages_result.scalars().all()
+
+    return TaskMessageList(
+        items=await build_task_message_responses(db, messages),
+        total=total,
+        skip=skip,
+        limit=limit,
+    )
+
+
+@router.post(
+    "/{task_id}/messages",
+    response_model=TaskMessageResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create task message",
+    description="Post a message for a task.",
+)
+async def create_task_message_endpoint(
+    task_id: str,
+    payload: TaskMessageCreate,
+    current_client: dict = Depends(get_current_client),
+    db: AsyncSession = Depends(get_db),
+) -> TaskMessageResponse:
+    client_id = current_client["client_id"]
+    client_user_id = current_client["client_user_id"]
+    task_result = await db.execute(
+        select(Task).where(
+            Task.id == task_id,
+            Task.client_id == client_id,
+        )
+    )
+    task = task_result.scalar_one_or_none()
+    if not task:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Task not found",
+        )
+
+    if payload.reply_to_id:
+        reply_check = await db.execute(
+            select(TaskMessage).where(
+                TaskMessage.id == payload.reply_to_id,
+                TaskMessage.task_id == task_id,
+            )
+        )
+        if not reply_check.scalar_one_or_none():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Reply target not found in this task",
+            )
+
+    message = await create_task_message(
+        db=db,
+        task=task,
+        author_type=TaskMessageAuthorType.CLIENT,
+        body=payload.body,
+        author_client_user_id=client_user_id,
+        reply_to_id=payload.reply_to_id,
+    )
+    await db.commit()
+
+    responses = await build_task_message_responses(db, [message])
+    return responses[0]
+
+
 @router.post(
     "/{task_id}/approve",
     response_model=TaskActionResponse,
@@ -251,7 +503,16 @@ async def approve_task(
     task.approved_by_client_user_id = client_user_id
     task.status = TaskStatus.COMPLETED
     task.completed_at = datetime.now(timezone.utc)
-    
+
+    if request.comment:
+        await create_task_message(
+            db=db,
+            task=task,
+            author_type=TaskMessageAuthorType.CLIENT,
+            body=request.comment,
+            author_client_user_id=client_user_id,
+        )
+
     await db.commit()
     
     return TaskActionResponse(
@@ -314,7 +575,16 @@ async def decline_task(
     task.approved_by_client_user_id = client_user_id
     # Don't mark as completed - staff may want to revise and resubmit
     task.status = TaskStatus.ON_HOLD
-    
+
+    if request.comment:
+        await create_task_message(
+            db=db,
+            task=task,
+            author_type=TaskMessageAuthorType.CLIENT,
+            body=request.comment,
+            author_client_user_id=client_user_id,
+        )
+
     await db.commit()
     
     return TaskActionResponse(
@@ -395,6 +665,8 @@ async def create_product_request(
     client_id = current_client["client_id"]
     tenant_id = current_client["tenant_id"]
     
+    client, assigned_user = await get_client_and_assignee(db, client_id, tenant_id)
+    
     # Build product list for description
     product_names = [p.product_name for p in request.products]
     product_list = ", ".join(product_names[:3])
@@ -427,6 +699,7 @@ async def create_product_request(
         status=TaskStatus.PENDING,
         priority=TaskPriority.MEDIUM,
         workflow_state=WorkflowState.PENDING_EAM,
+        assigned_to_id=client.assigned_to_user_id,
         proposal_data={
             "orders": orders,
             "products": [p.model_dump() for p in request.products],  # Keep for backward compatibility
@@ -441,9 +714,89 @@ async def create_product_request(
     await db.commit()
     await db.refresh(task)
     
+    notify_assigned_advisor(
+        assigned_user=assigned_user,
+        title="New product request",
+        body=f"{client.display_name} submitted a product request.",
+        data={
+            "task_id": str(task.id),
+            "client_id": client_id,
+            "client_name": client.display_name,
+            "task_type": task.task_type.value,
+            "product_count": len(request.products),
+        },
+    )
+    
     return ProductRequestResponse(
         task_id=task.id,
         message="Your product interest has been submitted to your advisor for review.",
         products_count=len(request.products),
     )
 
+
+@router.post(
+    "/lightweight-interest",
+    response_model=LightweightInterestResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Submit lightweight product interest",
+    description="Submit a lightweight interest request from a product detail page.",
+)
+async def create_lightweight_interest(
+    request: LightweightInterestCreate,
+    current_client: dict = Depends(get_current_client),
+    db: AsyncSession = Depends(get_db),
+) -> LightweightInterestResponse:
+    client_id = current_client["client_id"]
+    tenant_id = current_client["tenant_id"]
+    
+    client, assigned_user = await get_client_and_assignee(db, client_id, tenant_id)
+    
+    title = f"Lightweight Interest: {request.product_name}"
+    description = (
+        f"Client expressed interest in {request.product_name} ({request.interest_type}). "
+        "Please follow up with the client."
+    )
+    
+    task = Task(
+        tenant_id=tenant_id,
+        client_id=client_id,
+        title=title,
+        description=description,
+        task_type=TaskType.LIGHTWEIGHT_INTEREST,
+        status=TaskStatus.PENDING,
+        priority=TaskPriority.MEDIUM,
+        workflow_state=WorkflowState.PENDING_EAM,
+        assigned_to_id=client.assigned_to_user_id,
+        proposal_data={
+            "product_id": request.product_id,
+            "product_name": request.product_name,
+            "module_code": request.module_code,
+            "interest_type": request.interest_type,
+            "client_notes": request.client_notes,
+            "submitted_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+    
+    db.add(task)
+    await db.commit()
+    await db.refresh(task)
+    
+    notify_assigned_advisor(
+        assigned_user=assigned_user,
+        title="New product interest",
+        body=f"{client.display_name} requested {request.interest_type} for {request.product_name}.",
+        data={
+            "task_id": str(task.id),
+            "client_id": client_id,
+            "client_name": client.display_name,
+            "task_type": task.task_type.value,
+            "product_id": request.product_id,
+            "product_name": request.product_name,
+            "interest_type": request.interest_type,
+        },
+    )
+    
+    return LightweightInterestResponse(
+        task_id=task.id,
+        message="Your interest has been sent to your advisor.",
+    )

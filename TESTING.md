@@ -213,7 +213,11 @@ source venv/bin/activate
 
 ### Database Connection Error
 
-For now, we're using SQLite (`eam_platform.db`). No PostgreSQL needed for testing.
+Local testing uses PostgreSQL. Verify the service is running and the connection string in `.env` is correct, then run migrations:
+
+```bash
+alembic upgrade head
+```
 
 ### Check Server is Running
 
@@ -243,14 +247,11 @@ curl http://localhost:8000/health
 
 ## Database Schema
 
-The SQLite database file is created at: `backend/eam_platform.db`
+Use psql to inspect the local PostgreSQL database:
 
-To inspect it:
 ```bash
-sqlite3 eam_platform.db
-.tables
-.schema tenants
+psql "postgresql://postgres:postgres@localhost:5432/eam_platform"
+\dt
+\d+ tasks
 ```
-
-(Currently empty until migrations are run)
 

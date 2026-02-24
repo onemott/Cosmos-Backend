@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Optional
 from uuid import uuid4
 from datetime import datetime
 
-from sqlalchemy import String, ForeignKey, Enum as SQLEnum, DateTime, JSON, Boolean
+from sqlalchemy import String, ForeignKey, Enum as SQLEnum, DateTime, JSON, Boolean, Integer
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 import enum
 
@@ -21,7 +21,8 @@ class TaskType(str, enum.Enum):
     KYC_REVIEW = "kyc_review"
     DOCUMENT_REVIEW = "document_review"
     PROPOSAL_APPROVAL = "proposal_approval"
-    PRODUCT_REQUEST = "product_request"  # Client-initiated investment product request
+    PRODUCT_REQUEST = "product_request"
+    LIGHTWEIGHT_INTEREST = "lightweight_interest"
     COMPLIANCE_CHECK = "compliance_check"
     RISK_REVIEW = "risk_review"
     ACCOUNT_OPENING = "account_opening"
@@ -65,6 +66,12 @@ class TaskPriority(str, enum.Enum):
     URGENT = "urgent"
 
 
+class TaskMessageAuthorType(str, enum.Enum):
+    EAM = "eam"
+    CLIENT = "client"
+    SYSTEM = "system"
+
+
 class Task(Base, TimestampMixin):
     """Task / workflow item model."""
 
@@ -103,6 +110,12 @@ class Task(Base, TimestampMixin):
         UUID(as_uuid=False), ForeignKey("users.id"), nullable=True
     )
 
+    escalation_level: Mapped[int] = mapped_column(Integer, default=0)
+    escalated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    escalated_to_id: Mapped[Optional[str]] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("users.id"), nullable=True
+    )
+
     # Dates
     due_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -132,4 +145,37 @@ class Task(Base, TimestampMixin):
 
     # Relationships
     client: Mapped[Optional["Client"]] = relationship("Client", back_populates="tasks")
+
+
+class TaskMessage(Base, TimestampMixin):
+    __tablename__ = "task_messages"
+
+    id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        primary_key=True,
+        default=lambda: str(uuid4()),
+    )
+    tenant_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), nullable=False, index=True
+    )
+    task_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("tasks.id"), nullable=False, index=True
+    )
+    client_id: Mapped[Optional[str]] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("clients.id"), nullable=True, index=True
+    )
+    author_type: Mapped[TaskMessageAuthorType] = mapped_column(
+        SQLEnum(TaskMessageAuthorType), nullable=False
+    )
+    author_user_id: Mapped[Optional[str]] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("users.id"), nullable=True
+    )
+    author_client_user_id: Mapped[Optional[str]] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("client_users.id"), nullable=True
+    )
+    body: Mapped[str] = mapped_column(String(2000), nullable=False)
+    reply_to_id: Mapped[Optional[str]] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("task_messages.id"), nullable=True
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 

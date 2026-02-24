@@ -12,6 +12,7 @@ class TaskTypeEnum(str, Enum):
     DOCUMENT_REVIEW = "document_review"
     PROPOSAL_APPROVAL = "proposal_approval"
     PRODUCT_REQUEST = "product_request"
+    LIGHTWEIGHT_INTEREST = "lightweight_interest"
     COMPLIANCE_CHECK = "compliance_check"
     RISK_REVIEW = "risk_review"
     ACCOUNT_OPENING = "account_opening"
@@ -40,6 +41,12 @@ class TaskPriorityEnum(str, Enum):
     MEDIUM = "medium"
     HIGH = "high"
     URGENT = "urgent"
+
+
+class TaskMessageAuthorTypeEnum(str, Enum):
+    EAM = "eam"
+    CLIENT = "client"
+    SYSTEM = "system"
 
 
 # ============================================================================
@@ -81,6 +88,11 @@ class TaskRespondRequest(BaseModel):
     action: str = Field(..., description="Action: 'acknowledge', 'send_to_client', 'revise', 'complete'")
     comment: Optional[str] = Field(None, max_length=2000, description="Response comment")
     proposal_data: Optional[dict] = Field(None, description="Updated proposal data (for revision)")
+
+
+class TaskMessageCreate(BaseModel):
+    body: str = Field(..., max_length=2000, description="Message content")
+    reply_to_id: Optional[str] = Field(None, description="Reply to message ID")
 
 
 # ============================================================================
@@ -131,6 +143,9 @@ class TaskResponse(BaseModel):
     
     due_date: Optional[datetime] = None
     completed_at: Optional[datetime] = None
+    escalation_level: int = 0
+    escalated_at: Optional[datetime] = None
+    escalated_to_id: Optional[str] = None
     
     workflow_state: Optional[str] = None
     approval_required_by: Optional[datetime] = None
@@ -191,4 +206,29 @@ class TaskActionResponse(BaseModel):
     message: str
     new_status: Optional[str] = None
     new_workflow_state: Optional[str] = None
+
+
+class TaskMessageResponse(BaseModel):
+    id: str
+    task_id: str
+    tenant_id: str
+    client_id: Optional[str] = None
+    author_type: TaskMessageAuthorTypeEnum
+    author_user_id: Optional[str] = None
+    author_client_user_id: Optional[str] = None
+    author_name: Optional[str] = None
+    body: str
+    reply_to_id: Optional[str] = None
+    version: int
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class TaskMessageListResponse(BaseModel):
+    items: List[TaskMessageResponse]
+    total: int
+    skip: int
+    limit: int
 

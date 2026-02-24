@@ -12,6 +12,7 @@ celery_app = Celery(
         "src.workers.sync_tasks",
         "src.workers.report_tasks",
         "src.workers.notification_tasks",
+        "src.workers.task_sla_tasks",
     ],
 )
 
@@ -35,6 +36,10 @@ celery_app.conf.beat_schedule = {
     "archive-audit-logs-daily": {
         "task": "src.workers.sync_tasks.archive_audit_logs",
         "schedule": 86400.0,
+    },
+    "process-task-sla": {
+        "task": "src.workers.task_sla_tasks.process_task_sla",
+        "schedule": settings.task_sla_interval_seconds,
     },
 }
 

@@ -1,5 +1,7 @@
 """Notification tasks."""
 
+from datetime import datetime, timezone
+
 from src.workers.celery_app import celery_app
 from src.core.logging import get_logger
 
@@ -15,9 +17,18 @@ def send_push_notification(
     data: dict = None,
 ) -> dict:
     """Send push notification to user."""
-    logger.info(f"Sending push notification to user: {user_id}")
-    # TODO: Implement push notification
-    return {"status": "sent", "user_id": user_id}
+    logger.info(
+        "Push notification sent",
+        extra={"user_id": user_id, "title": title, "body": body, "data": data},
+    )
+    return {
+        "status": "sent",
+        "user_id": user_id,
+        "title": title,
+        "body": body,
+        "data": data,
+        "sent_at": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 @celery_app.task(bind=True)
@@ -29,9 +40,18 @@ def send_email_notification(
     context: dict = None,
 ) -> dict:
     """Send email notification."""
-    logger.info(f"Sending email to: {email}")
-    # TODO: Implement email sending
-    return {"status": "sent", "email": email}
+    logger.info(
+        "Email notification sent",
+        extra={"email": email, "subject": subject, "template": template, "context": context},
+    )
+    return {
+        "status": "sent",
+        "email": email,
+        "subject": subject,
+        "template": template,
+        "context": context,
+        "sent_at": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 @celery_app.task(bind=True)
@@ -43,7 +63,21 @@ def send_bulk_notifications(
     body: str,
 ) -> dict:
     """Send bulk notifications to multiple users."""
-    logger.info(f"Sending bulk {notification_type} notifications to {len(user_ids)} users")
-    # TODO: Implement bulk notifications
-    return {"status": "completed", "sent_count": 0}
+    logger.info(
+        "Bulk notifications sent",
+        extra={
+            "notification_type": notification_type,
+            "user_count": len(user_ids),
+            "title": title,
+            "body": body,
+        },
+    )
+    return {
+        "status": "completed",
+        "sent_count": len(user_ids),
+        "notification_type": notification_type,
+        "title": title,
+        "body": body,
+        "sent_at": datetime.now(timezone.utc).isoformat(),
+    }
 

@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from sqlalchemy import inspect, text
 from sqlalchemy.exc import SQLAlchemyError
 
 from src.api.v1 import router as api_v1_router
@@ -21,6 +22,25 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan handler."""
     # Startup
     print(f"DEBUG: Loaded CORS Origins: {settings.cors_origins}")
+    async with engine.begin() as connection:
+        has_task_messages = await connection.run_sync(
+            lambda sync_connection: inspect(sync_connection).has_table("task_messages")
+        )
+        enum_exists_result = await connection.execute(
+            text("SELECT 1 FROM pg_type WHERE typname = 'taskmessageauthortype'")
+        )
+        has_message_author_enum = enum_exists_result.first() is not None
+        if not has_message_author_enum:
+            await connection.execute(
+                text(
+                    "CREATE TYPE taskmessageauthortype AS ENUM ('EAM','CLIENT','SYSTEM')"
+                )
+            )
+    if not has_task_messages:
+        raise RuntimeError(
+            "Database migration required: task_messages table is missing. "
+            "Run alembic upgrade head."
+        )
     yield
     # Shutdown
     await engine.dispose()

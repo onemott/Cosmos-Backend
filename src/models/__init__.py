@@ -5,6 +5,7 @@ from src.models.user import User, Role, Permission, UserRole
 from src.models.client import Client, ClientGroup
 from src.models.client_user import ClientUser
 from src.models.account import Account, BankConnection
+from src.models.account_valuation import AccountValuation
 from src.models.holding import Holding, Instrument
 from src.models.transaction import Transaction
 from src.models.document import Document
@@ -24,6 +25,7 @@ __all__ = [
     "ClientGroup",
     "ClientUser",
     "Account",
+    "AccountValuation",
     "BankConnection",
     "Holding",
     "Instrument",

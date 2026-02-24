@@ -204,7 +204,7 @@ async def create_user_with_role(session, role_name, user_data, tenant):
             hashed_password=hash_password(user_data["password"]),
             first_name=user_data["first_name"],
             last_name=user_data["last_name"],
-            tenant_id=tenant.id,
+            tenant_id=tenant.id if tenant else None,
             is_active=True,
             is_superuser=user_data.get("is_superuser", False),
             supervisor_id=supervisor_id,
@@ -410,8 +410,8 @@ async def seed_role_accounts():
                 
                 # Determine which tenant to use
                 if role_name in ["super_admin", "platform_admin", "platform_user"]:
-                    tenant = platform_tenant
-                    print(f"  Using platform tenant")
+                    tenant = None
+                    print(f"  Using NO tenant (Platform)")
                 else:
                     tenant = test_tenant
                     print(f"  Using test EAM tenant")
@@ -422,7 +422,7 @@ async def seed_role_accounts():
                         "role": role_name,
                         "email": user_data["email"],
                         "password": user_data["password"],
-                        "tenant": tenant.name,
+                        "tenant": tenant.name if tenant else "Platform",
                         "name": f"{user_data['first_name']} {user_data['last_name']}"
                     })
                     users_by_role[role_name] = user

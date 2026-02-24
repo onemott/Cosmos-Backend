@@ -92,14 +92,16 @@ async def get_portfolio_summary(
     )
     total_holdings = holdings_result.scalar() or 0
     
-    # Basic performance (placeholder - real calculation would need historical data)
-    # For now, just return None for performance
+    # Calculate performance using PerformanceService
+    perf_service = PerformanceService(db)
+    metrics = await perf_service.get_performance_metrics(client_id)
+    
     performance = PerformanceMetrics(
-        period_1m=None,
-        period_3m=None,
-        period_6m=None,
-        period_ytd=None,
-        period_1y=None,
+        period_1m=metrics.get("1M"),
+        period_3m=metrics.get("3M"),
+        period_6m=metrics.get("6M"),
+        period_ytd=metrics.get("YTD"),
+        period_1y=metrics.get("1Y"),
     )
     
     return PortfolioSummary(

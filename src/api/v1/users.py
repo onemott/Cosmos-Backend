@@ -44,7 +44,7 @@ class UserWithHierarchyResponse(BaseModel):
     email: str
     first_name: str
     last_name: str
-    tenant_id: str
+    tenant_id: Optional[str] = None
     is_active: bool
     is_superuser: bool
     roles: List[str]
@@ -64,7 +64,7 @@ def user_to_response(user) -> UserResponse:
         email=user.email,
         first_name=user.first_name,
         last_name=user.last_name,
-        tenant_id=str(user.tenant_id),
+        tenant_id=str(user.tenant_id) if user.tenant_id else None,
         is_active=user.is_active,
         is_superuser=user.is_superuser,
         roles=[role.name for role in user.roles] if user.roles else [],
@@ -84,7 +84,7 @@ def user_to_hierarchy_response(user, subordinate_count: int = 0) -> UserWithHier
         email=user.email,
         first_name=user.first_name,
         last_name=user.last_name,
-        tenant_id=str(user.tenant_id),
+        tenant_id=str(user.tenant_id) if user.tenant_id else None,
         is_active=user.is_active,
         is_superuser=user.is_superuser,
         roles=[role.name for role in user.roles] if user.roles else [],
@@ -190,7 +190,7 @@ async def create_user(
     user_in: UserCreate,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_tenant_admin),
+    current_user: dict = Depends(get_current_user),
 ) -> UserResponse:
     """Create a new user.
 
@@ -198,6 +198,15 @@ async def create_user(
     - Super admins: Can specify tenant_id to create user in any tenant
     - Can assign roles via role_ids
     """
+    is_platform = deps_is_platform_admin(current_user)
+    is_tenant = deps_is_tenant_admin(current_user)
+    
+    if not (is_platform or is_tenant):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access required",
+        )
+
     repo = UserRepository(db)
 
     # Check if email already exists
@@ -212,13 +221,21 @@ async def create_user(
     user_data = user_in.model_dump(exclude={"password", "role_ids", "tenant_id"})
 
     # Determine tenant_id
-    if is_platform_admin(current_user) and user_in.tenant_id:
+    if is_platform and user_in.tenant_id:
         # Super admin can specify tenant
         user_data["tenant_id"] = user_in.tenant_id
+    elif is_platform:
+        # Creating platform user
+        user_data["tenant_id"] = None
     else:
         # Use current user's tenant
-        user_data["tenant_id"] = current_user.get(
-            "tenant_id", "00000000-0000-0000-0000-000000000000"
+        user_data["tenant_id"] = current_user.get("tenant_id")
+        
+    if not user_data.get("tenant_id") and not is_platform:
+        # Should not happen for tenant admin, but safety check
+         raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Tenant ID required",
         )
 
     # Hash password if provided
@@ -314,9 +331,18 @@ async def update_user(
     user_in: UserUpdate,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_tenant_admin),
+    current_user: dict = Depends(get_current_user),
 ) -> UserResponse:
     """Update user and optionally update roles."""
+    is_platform = deps_is_platform_admin(current_user)
+    is_tenant = deps_is_tenant_admin(current_user)
+
+    if not (is_platform or is_tenant):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access required",
+        )
+
     repo = UserRepository(db)
     user = await repo.get(user_id)
 
@@ -402,9 +428,18 @@ async def deactivate_user(
     user_id: str,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_tenant_admin),
+    current_user: dict = Depends(get_current_user),
 ) -> None:
     """Deactivate user (soft delete - sets is_active to False)."""
+    is_platform = deps_is_platform_admin(current_user)
+    is_tenant = deps_is_tenant_admin(current_user)
+
+    if not (is_platform or is_tenant):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access required",
+        )
+
     repo = UserRepository(db)
     user = await repo.get(user_id)
 
@@ -461,12 +496,21 @@ async def delete_user_permanent(
     user_id: str,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_tenant_admin),
+    current_user: dict = Depends(get_current_user),
 ) -> None:
     """Permanently delete user.
 
     WARNING: This action cannot be undone.
     """
+    is_platform = deps_is_platform_admin(current_user)
+    is_tenant = deps_is_tenant_admin(current_user)
+
+    if not (is_platform or is_tenant):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access required",
+        )
+
     repo = UserRepository(db)
     user = await repo.get(user_id)
 
@@ -790,7 +834,7 @@ async def get_user_with_hierarchy(
 async def get_tenant_org_tree(
     tenant_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_tenant_admin),
+    current_user: dict = Depends(get_current_user),
 ) -> List[Dict[str, Any]]:
     """Get the complete organizational tree for a tenant.
     
@@ -799,6 +843,15 @@ async def get_tenant_org_tree(
     - Tenant admins can view their own tenant's org tree
     - Platform admins can view any tenant's org tree
     """
+    is_platform = deps_is_platform_admin(current_user)
+    is_tenant = deps_is_tenant_admin(current_user)
+
+    if not (is_platform or is_tenant):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access required",
+        )
+
     # Access check
     if not deps_is_platform_admin(current_user) and tenant_id != current_user.get("tenant_id"):
         raise HTTPException(

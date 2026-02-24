@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.db.session import get_db
-from src.api.deps import get_current_user
+from src.api.deps import get_current_user, require_tenant_user
 
 router = APIRouter()
 
@@ -18,7 +18,7 @@ async def list_holdings(
     skip: int = 0,
     limit: int = 100,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_tenant_user),
 ) -> List[dict]:
     """List holdings with optional filters."""
     # TODO: Implement holdings listing
@@ -29,7 +29,7 @@ async def list_holdings(
 async def get_holdings_summary(
     client_id: str = None,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_tenant_user),
 ) -> dict:
     """Get holdings summary (allocation by asset class, region, etc.)."""
     # TODO: Implement holdings summary
@@ -45,7 +45,7 @@ async def get_holdings_summary(
 async def get_allocation(
     client_id: str = None,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_tenant_user),
 ) -> dict:
     """Get portfolio allocation breakdown."""
     # TODO: Implement allocation calculation

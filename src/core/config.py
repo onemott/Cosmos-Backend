@@ -65,9 +65,9 @@ class Settings(BaseSettings):
 
     platform_roles: List[str] = ["super_admin", "platform_admin", "platform_user"]
     platform_admin_roles: List[str] = ["super_admin", "platform_admin"]
-    tenant_admin_roles: List[str] = ["super_admin", "platform_admin", "tenant_admin"]
-    supervisor_roles: List[str] = ["super_admin", "platform_admin", "tenant_admin", "eam_supervisor"]
-    all_staff_roles: List[str] = ["super_admin", "platform_admin", "tenant_admin", "eam_supervisor", "eam_staff"]
+    tenant_admin_roles: List[str] = ["tenant_admin"]
+    supervisor_roles: List[str] = ["tenant_admin", "eam_supervisor"]
+    all_staff_roles: List[str] = ["tenant_admin", "eam_supervisor", "eam_staff"]
 
     @property
     def is_production(self) -> bool:

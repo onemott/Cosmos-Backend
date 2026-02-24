@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from src.models.client import Client
     from src.models.holding import Holding
     from src.models.transaction import Transaction
+    from src.models.account_valuation import AccountValuation
 
 
 class AccountType(str, enum.Enum):
@@ -120,5 +121,8 @@ class Account(Base, TimestampMixin):
     )
     transactions: Mapped[list["Transaction"]] = relationship(
         "Transaction", back_populates="account", cascade="all, delete-orphan"
+    )
+    valuations: Mapped[list["AccountValuation"]] = relationship(
+        "AccountValuation", back_populates="account", cascade="all, delete-orphan"
     )
 

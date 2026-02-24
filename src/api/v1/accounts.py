@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from src.db.session import get_db
-from src.api.deps import get_current_user
+from src.api.deps import get_current_user, require_tenant_user
 from src.models.account import Account, AccountType
 from src.models.client import Client
 from src.models.holding import Holding
@@ -129,7 +129,7 @@ async def list_accounts(
     skip: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_tenant_user),
 ) -> AccountListResponse:
     """List accounts with optional filters."""
     tenant_id = current_user.get("tenant_id")
@@ -174,7 +174,7 @@ async def list_accounts(
 async def create_account(
     data: AccountCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_tenant_user),
 ) -> AccountResponse:
     """Create a new account manually."""
     tenant_id = current_user.get("tenant_id")
@@ -239,7 +239,7 @@ async def create_account(
 async def get_account(
     account_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_tenant_user),
 ) -> AccountResponse:
     """Get account by ID."""
     tenant_id = current_user.get("tenant_id")
@@ -270,7 +270,7 @@ async def update_account(
     account_id: str,
     data: AccountUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_tenant_user),
 ) -> AccountResponse:
     """Update account details."""
     tenant_id = current_user.get("tenant_id")
@@ -318,7 +318,7 @@ async def reassign_account(
     account_id: str,
     data: AccountReassign,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_tenant_user),
 ) -> AccountResponse:
     """Reassign account to a different client."""
     tenant_id = current_user.get("tenant_id")
@@ -376,7 +376,7 @@ async def delete_account(
     account_id: str,
     hard_delete: bool = Query(False, description="Permanently delete instead of soft delete"),
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_tenant_user),
 ) -> None:
     """Delete (or soft-delete) an account."""
     tenant_id = current_user.get("tenant_id")
@@ -409,7 +409,7 @@ async def delete_account(
 async def reactivate_account(
     account_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_tenant_user),
 ) -> AccountResponse:
     """Reactivate a soft-deleted account."""
     tenant_id = current_user.get("tenant_id")
@@ -447,7 +447,7 @@ async def reactivate_account(
 async def get_account_holdings(
     account_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_tenant_user),
 ) -> List[dict]:
     """Get holdings for an account."""
     tenant_id = current_user.get("tenant_id")
@@ -498,7 +498,7 @@ async def get_account_transactions(
     skip: int = 0,
     limit: int = 50,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_tenant_user),
 ) -> List[dict]:
     """Get transactions for an account."""
     # TODO: Implement transactions listing for account
@@ -510,7 +510,7 @@ async def get_account_performance(
     account_id: str,
     period: str = "1Y",  # 1M, 3M, 6M, 1Y, YTD, ALL
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_tenant_user),
 ) -> dict:
     """Get performance metrics for an account."""
     # TODO: Implement performance calculation

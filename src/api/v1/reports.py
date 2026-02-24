@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.db.session import get_db
-from src.api.deps import get_current_user
+from src.api.deps import get_current_user, require_tenant_user
 
 router = APIRouter()
 
@@ -17,7 +17,7 @@ async def list_reports(
     skip: int = 0,
     limit: int = 20,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_tenant_user),
 ) -> List[dict]:
     """List generated reports."""
     return []
@@ -30,7 +30,7 @@ async def generate_report(
     period_start: str = None,
     period_end: str = None,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_tenant_user),
 ) -> dict:
     """Request report generation."""
     raise HTTPException(
@@ -43,7 +43,7 @@ async def generate_report(
 async def get_report(
     report_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_tenant_user),
 ) -> dict:
     """Get report metadata and status."""
     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found")
@@ -53,7 +53,7 @@ async def get_report(
 async def download_report(
     report_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_tenant_user),
 ) -> dict:
     """Get presigned URL for report download."""
     raise HTTPException(

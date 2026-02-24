@@ -44,8 +44,8 @@ class User(Base, TimestampMixin):
         primary_key=True,
         default=lambda: str(uuid4()),
     )
-    tenant_id: Mapped[str] = mapped_column(
-        UUID(as_uuid=False), ForeignKey("tenants.id"), nullable=False, index=True
+    tenant_id: Mapped[Optional[str]] = mapped_column(
+        UUID(as_uuid=False), ForeignKey("tenants.id"), nullable=True, index=True
     )
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     hashed_password: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)

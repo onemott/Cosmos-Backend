@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from src.db.session import get_db
-from src.api.deps import get_current_user, get_current_tenant_admin
+from src.api.deps import get_current_user, require_tenant_user, get_current_tenant_admin
 from src.models.client_user import ClientUser
 from src.models.client import Client
 from src.core.security import hash_password, generate_temp_password
@@ -137,7 +137,7 @@ async def list_client_users(
     skip: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_tenant_user),
 ) -> ClientUserListResponse:
     """List all client users for the current tenant.
     
@@ -186,7 +186,7 @@ async def list_client_users(
 async def get_client_user(
     client_user_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_tenant_user),
 ) -> ClientUserResponse:
     """Get a specific client user by ID."""
     tenant_id = current_user.get("tenant_id")
@@ -441,7 +441,7 @@ async def delete_client_user(
 async def get_client_user_by_client(
     client_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_tenant_user),
 ) -> ClientUserResponse:
     """Get client user credentials by client ID.
     

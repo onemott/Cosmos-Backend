@@ -16,9 +16,6 @@ from src.models.client_user import ClientUser
 
 security = HTTPBearer(auto_error=False)
 
-# Platform tenant ID (fixed UUID)
-PLATFORM_TENANT_ID = "00000000-0000-0000-0000-000000000000"
-
 # Role constants for clarity
 PLATFORM_ROLES = set(settings.platform_roles)
 PLATFORM_ADMIN_ROLES = set(settings.platform_admin_roles)
@@ -87,7 +84,7 @@ async def get_current_user(
             detail="Client tokens cannot access admin APIs",
         )
 
-    # Check if user's tenant is still active
+    # Check if user's tenant is still active (only if tenant_id is present)
     if payload.tenant_id:
         if not await check_tenant_active(db, payload.tenant_id):
             raise HTTPException(
@@ -103,6 +100,21 @@ async def get_current_user(
     }
 
 
+async def require_tenant_user(
+    current_user: dict = Depends(get_current_user),
+) -> dict:
+    """Ensure current user belongs to a tenant (not a platform user).
+    
+    Use for all tenant-specific business data endpoints.
+    """
+    if not current_user.get("tenant_id"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Platform users cannot access tenant business data",
+        )
+    return current_user
+
+
 async def get_current_superuser(
     current_user: dict = Depends(get_current_user),
 ) -> dict:
@@ -110,10 +122,9 @@ async def get_current_superuser(
     
     Use for write operations (create/update/delete) on platform resources.
     """
-    platform_roles = {"super_admin", "platform_admin"}
     user_roles = set(current_user.get("roles", []))
     
-    if not platform_roles.intersection(user_roles):
+    if not PLATFORM_ADMIN_ROLES.intersection(user_roles):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Platform admin access required",
@@ -132,10 +143,9 @@ async def get_platform_user(
     
     Use for read operations on platform resources like tenants list.
     """
-    platform_roles = {"super_admin", "platform_admin", "platform_user"}
     user_roles = set(current_user.get("roles", []))
     
-    if not platform_roles.intersection(user_roles):
+    if not PLATFORM_ROLES.intersection(user_roles):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Platform access required",
@@ -146,19 +156,18 @@ async def get_platform_user(
 async def get_current_tenant_admin(
     current_user: dict = Depends(get_current_user),
 ) -> dict:
-    """Ensure current user is a tenant admin or higher.
+    """Ensure current user is a tenant admin.
     
     Allowed roles:
-    - super_admin, platform_admin: Platform-level access
     - tenant_admin: Tenant-level admin access
+    (Platform admins are NO LONGER allowed)
     """
-    allowed_roles = {"super_admin", "platform_admin", "tenant_admin"}
     user_roles = set(current_user.get("roles", []))
     
-    if not allowed_roles.intersection(user_roles):
+    if not TENANT_ADMIN_ROLES.intersection(user_roles):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin access required",
+            detail="Tenant admin access required",
         )
     return current_user
 
@@ -166,11 +175,11 @@ async def get_current_tenant_admin(
 async def get_platform_tenant_user(
     current_user: dict = Depends(get_current_user),
 ) -> dict:
-    """Ensure current user belongs to the platform tenant.
+    """Ensure current user belongs to the platform (no tenant).
     
     Use for operations that should only be accessible to platform staff.
     """
-    if current_user.get("tenant_id") != PLATFORM_TENANT_ID:
+    if current_user.get("tenant_id") is not None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Platform tenant access required",
@@ -184,11 +193,8 @@ async def get_supervisor_or_higher(
     """Ensure current user is a supervisor or higher.
     
     Allowed roles:
-    - super_admin, platform_admin: Platform-level access
     - tenant_admin: Tenant admin access
     - eam_supervisor: Supervisor access
-    
-    Use for operations that require access to subordinate data.
     """
     user_roles = set(current_user.get("roles", []))
     
@@ -206,12 +212,9 @@ async def get_eam_staff_or_higher(
     """Ensure current user is at least an EAM staff member.
     
     Allowed roles:
-    - super_admin, platform_admin: Platform-level access
     - tenant_admin: Tenant admin access
     - eam_supervisor: Supervisor access
     - eam_staff: Staff access
-    
-    Use for basic tenant operations available to all EAM employees.
     """
     user_roles = set(current_user.get("roles", []))
     
@@ -242,9 +245,9 @@ def is_platform_user(user: dict) -> bool:
 
 
 def is_tenant_admin(user: dict) -> bool:
-    """Check if user has tenant admin access or higher.
+    """Check if user has tenant admin access.
     
-    Returns True for super_admin, platform_admin, and tenant_admin roles.
+    Returns True for tenant_admin roles.
     """
     roles = set(user.get("roles", []))
     return bool(TENANT_ADMIN_ROLES.intersection(roles))
@@ -253,7 +256,7 @@ def is_tenant_admin(user: dict) -> bool:
 def is_supervisor(user: dict) -> bool:
     """Check if user has supervisor access or higher.
     
-    Returns True for super_admin, platform_admin, tenant_admin, and eam_supervisor roles.
+    Returns True for tenant_admin and eam_supervisor roles.
     """
     roles = set(user.get("roles", []))
     return bool(SUPERVISOR_ROLES.intersection(roles))
@@ -519,4 +522,3 @@ def require_client_module(module_code: str):
         return current_client
 
     return check_client_module_access
-

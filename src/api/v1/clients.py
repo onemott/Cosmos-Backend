@@ -31,6 +31,7 @@ from src.schemas.client import (
 from src.api.deps import (
     get_current_user,
     get_current_tenant_admin,
+    require_tenant_user,
     get_supervisor_or_higher,
     get_user_role_level,
     is_tenant_admin as deps_is_tenant_admin,
@@ -64,7 +65,7 @@ async def list_clients(
     kyc_status: Optional[str] = Query(None, description="Filter by KYC status (pending, in_progress, approved, rejected, expired)"),
     assigned_to: Optional[str] = Query(None, description="Filter by assigned user ID"),
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_tenant_user),
 ) -> List[ClientWithAssigneeResponse]:
     """List clients for the current user's tenant with role-based filtering.
 
@@ -157,7 +158,7 @@ async def list_clients(
 async def create_client(
     client_in: ClientCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_tenant_user),
 ) -> ClientResponse:
     """Create a new client.
     
@@ -198,7 +199,7 @@ async def create_client(
 async def get_client(
     client_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_tenant_user),
 ) -> ClientResponse:
     """Get client by ID. Only accessible if client belongs to user's tenant."""
     repo = ClientRepository(db)
@@ -225,7 +226,7 @@ async def update_client(
     client_id: str,
     client_in: ClientUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_tenant_user),
 ) -> ClientResponse:
     """Update client. Only accessible if client belongs to user's tenant."""
     repo = ClientRepository(db)
@@ -256,7 +257,7 @@ async def update_client(
 async def delete_client(
     client_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_tenant_user),
 ) -> None:
     """Delete client. Only accessible if client belongs to user's tenant."""
     repo = ClientRepository(db)
@@ -282,7 +283,7 @@ async def delete_client(
 async def get_client_accounts(
     client_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_tenant_user),
 ) -> List[dict]:
     """Get all accounts for a client. Only accessible if client belongs to user's tenant."""
     repo = ClientRepository(db)
@@ -320,7 +321,7 @@ async def get_client_accounts(
 async def get_client_documents(
     client_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_tenant_user),
 ) -> List[dict]:
     """Get all documents for a client. Only accessible if client belongs to user's tenant."""
     repo = ClientRepository(db)
@@ -374,7 +375,7 @@ from sqlalchemy import and_
 async def get_client_modules(
     client_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_tenant_user),
 ) -> List[ClientModuleResponse]:
     """Get all modules for a client with their enabled status.
     
@@ -654,7 +655,7 @@ async def get_my_assigned_clients(
     limit: int = Query(20, ge=1, le=100),
     search: Optional[str] = Query(None),
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_tenant_user),
 ) -> List[ClientWithAssigneeResponse]:
     """Get clients assigned to the current user.
     
@@ -798,7 +799,7 @@ async def reassign_client(
     client_id: str,
     request: ReassignClientRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_tenant_user),
 ) -> ClientResponse:
     """Reassign a client to another user.
     

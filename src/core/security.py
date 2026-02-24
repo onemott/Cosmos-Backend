@@ -24,8 +24,8 @@ class TokenPayload(BaseModel):
     """JWT token payload."""
 
     sub: str
-    tenant_id: str
-    roles: list[str]
+    tenant_id: Optional[str] = None
+    roles: list[str] = []
     exp: datetime
     iat: datetime
     # Optional fields for client tokens
@@ -74,7 +74,7 @@ def generate_temp_password(length: int = 12) -> str:
 
 def create_access_token(
     subject: str,
-    tenant_id: str,
+    tenant_id: Optional[str],
     roles: list[str],
     expires_delta: Optional[timedelta] = None,
 ) -> str:
@@ -95,7 +95,7 @@ def create_access_token(
     return jwt.encode(to_encode, settings.secret_key, algorithm=ALGORITHM)
 
 
-def create_refresh_token(subject: str, tenant_id: str) -> str:
+def create_refresh_token(subject: str, tenant_id: Optional[str]) -> str:
     """Create a JWT refresh token."""
     now = datetime.now(timezone.utc)
     expire = now + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)

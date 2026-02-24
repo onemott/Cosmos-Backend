@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.db.session import get_db
-from src.api.deps import get_current_user, get_current_tenant_admin
+from src.api.deps import get_current_user, require_tenant_user, get_current_tenant_admin
 from src.models.client import Client
 from src.models.document import DocumentType
 from src.services.document_service import DocumentService
@@ -62,7 +62,7 @@ async def list_documents(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_tenant_user),
 ) -> AdminDocumentList:
     """List documents with optional filters.
     
@@ -217,7 +217,7 @@ async def upload_document(
 async def get_document(
     document_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_tenant_user),
 ) -> AdminDocumentSummary:
     """Get document metadata by ID."""
     tenant_id = current_user.get("tenant_id")
@@ -256,7 +256,7 @@ async def get_document(
 async def download_document(
     document_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_tenant_user),
 ):
     """Download a document.
     

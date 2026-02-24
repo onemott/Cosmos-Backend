@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from src.db.session import get_db
-from src.api.deps import get_current_user, get_current_tenant_admin
+from src.api.deps import get_current_user, require_tenant_user, get_current_tenant_admin
 from src.models.task import (
     Task,
     TaskType,
@@ -243,7 +243,7 @@ async def list_tasks(
     skip: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_tenant_user),
 ) -> TaskListResponse:
     """List tasks with optional filters.
     
@@ -391,7 +391,7 @@ async def list_tasks(
 async def get_task(
     task_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_tenant_user),
 ) -> TaskResponse:
     """Get task by ID with full details."""
     tenant_id = current_user.get("tenant_id")
@@ -442,7 +442,7 @@ async def list_task_messages(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_tenant_user),
 ) -> TaskMessageListResponse:
     tenant_id = current_user.get("tenant_id")
     task_query = select(Task).where(Task.id == task_id)
@@ -482,7 +482,7 @@ async def create_task_message_endpoint(
     task_id: str,
     payload: TaskMessageCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_tenant_user),
 ) -> TaskMessageResponse:
     tenant_id = current_user.get("tenant_id")
     task_query = select(Task).where(Task.id == task_id)
@@ -587,7 +587,7 @@ async def update_task(
     task_id: str,
     task_update: TaskUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_tenant_user),
 ) -> TaskResponse:
     """Update task status, assignment, or other fields."""
     tenant_id = current_user.get("tenant_id")
@@ -642,7 +642,7 @@ async def respond_to_task(
     task_id: str,
     request: TaskRespondRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_tenant_user),
 ) -> TaskActionResponse:
     """EAM responds to a task (after client action or for workflow management).
     
@@ -759,7 +759,7 @@ async def assign_task(
     task_id: str,
     user_id: str = Query(..., description="User ID to assign to"),
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_tenant_user),
 ) -> TaskResponse:
     """Assign a task to a user."""
     tenant_id = current_user.get("tenant_id")

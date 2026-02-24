@@ -35,7 +35,7 @@ class UserResponse(UserBase):
     """User response schema."""
 
     id: str
-    tenant_id: str
+    tenant_id: Optional[str] = None
     is_active: bool
     is_superuser: bool
     roles: List[str] = []  # List of role names

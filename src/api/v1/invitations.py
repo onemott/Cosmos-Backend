@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from src.db.session import get_db
-from src.api.deps import get_current_user, get_current_tenant_admin
+from src.api.deps import get_current_user, require_tenant_user, get_current_tenant_admin
 from src.models.invitation import Invitation, InvitationStatus
 from src.models.client import Client, ClientType
 from src.models.client_user import ClientUser
@@ -258,7 +258,7 @@ async def list_invitations(
     skip: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_tenant_user),
 ) -> InvitationListResponse:
     """List invitations for the current tenant."""
     tenant_id = current_user.get("tenant_id")
@@ -323,7 +323,7 @@ async def list_invitations(
 async def get_invitation(
     invitation_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_tenant_user),
 ) -> InvitationResponse:
     """Get a specific invitation by ID."""
     tenant_id = current_user.get("tenant_id")

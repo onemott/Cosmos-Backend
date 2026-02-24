@@ -87,14 +87,15 @@ async def login(
         roles = [role.name for role in user.roles]
         
         # Generate tokens
+        tenant_id = str(user.tenant_id) if user.tenant_id else None
         access_token = create_access_token(
             subject=str(user.id),
-            tenant_id=str(user.tenant_id),
+            tenant_id=tenant_id,
             roles=roles,
         )
         refresh_token = create_refresh_token(
             subject=str(user.id),
-            tenant_id=str(user.tenant_id),
+            tenant_id=tenant_id,
         )
         
         return TokenResponse(
@@ -150,14 +151,16 @@ async def refresh_token(
     
     roles = [role.name for role in user.roles]
     
+    tenant_id = str(user.tenant_id) if user.tenant_id else None
+    
     access_token = create_access_token(
         subject=str(user.id),
-        tenant_id=str(user.tenant_id),
+        tenant_id=tenant_id,
         roles=roles,
     )
     new_refresh_token = create_refresh_token(
         subject=str(user.id),
-        tenant_id=str(user.tenant_id),
+        tenant_id=tenant_id,
     )
     
     return TokenResponse(

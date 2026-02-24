@@ -50,7 +50,13 @@ class Settings(BaseSettings):
     celery_result_backend: str = "redis://localhost:6379/2"
 
     # CORS
-    cors_origins: List[str] = ["*"]
+    cors_origins: List[str] = [
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:3001",
+        "*"
+    ]
 
     # Logging
     log_level: str = "INFO"

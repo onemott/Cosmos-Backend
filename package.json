@@ -1,5 +1,6 @@
 {
   "dependencies": {
-    "@tanstack/react-query-persist-client": "^5.90.22"
+    "@tanstack/react-query-persist-client": "^5.90.22",
+    "react-native-markdown-display": "^7.0.2"
   }
 }

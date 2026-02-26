@@ -5,7 +5,10 @@ from fastapi import APIRouter
 from src.api.v1 import auth, tenants, users, clients, accounts, holdings, transactions
 from src.api.v1 import documents, tasks, modules, reports, stats, roles
 from src.api.v1 import categories, products, invitations, client_users, audit_logs
-from src.api.v1 import client_auth, client_portfolio, client_documents, client_tasks, client_products
+from src.api.v1 import client_auth, client_portfolio, client_documents, client_tasks, client_products, client_notifications, client_agreements
+from src.api.v1 import system
+from src.api.v1.admin import system as admin_system
+from src.api.v1.admin import notifications as admin_notifications
 
 router = APIRouter()
 
@@ -29,9 +32,16 @@ router.include_router(reports.router, prefix="/reports", tags=["Reports"])
 router.include_router(stats.router, prefix="/stats", tags=["Statistics"])
 router.include_router(audit_logs.router, prefix="/audit-logs", tags=["Audit Logs"])
 
+# System APIs
+router.include_router(system.router, prefix="/system", tags=["System"])
+router.include_router(admin_system.router, prefix="/admin/system", tags=["Admin System"])
+router.include_router(admin_notifications.router, prefix="/admin", tags=["Admin Notifications"])
+
 # Client-Facing APIs (prefix already included in router)
 router.include_router(client_auth.router)
 router.include_router(client_portfolio.router)
 router.include_router(client_documents.router)
 router.include_router(client_tasks.router)
 router.include_router(client_products.router)
+router.include_router(client_notifications.router)
+router.include_router(client_agreements.router, prefix="/client/agreements", tags=["Client Agreements"])

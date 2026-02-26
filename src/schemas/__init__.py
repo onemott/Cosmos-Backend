@@ -48,6 +48,12 @@ from src.schemas.product import (
     ProductVisibilityUpdate,
     ProductSummaryResponse,
 )
+from src.schemas.notification import (
+    NotificationCreate,
+    NotificationUpdate,
+    NotificationResponse,
+    NotificationListResponse,
+)
 
 __all__ = [
     "PaginationParams",
@@ -101,5 +107,10 @@ __all__ = [
     "ProductResponse",
     "ProductVisibilityUpdate",
     "ProductSummaryResponse",
+    # Notification
+    "NotificationCreate",
+    "NotificationUpdate",
+    "NotificationResponse",
+    "NotificationListResponse",
 ]
 

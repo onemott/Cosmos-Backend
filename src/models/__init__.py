@@ -14,6 +14,7 @@ from src.models.module import Module, TenantModule, ClientModule, ModuleCategory
 from src.models.product import Product, ProductCategory, TenantProduct
 from src.models.audit_log import AuditLog, AuditLogArchive
 from src.models.invitation import Invitation, InvitationStatus
+from src.models.notification import Notification
 
 __all__ = [
     "Tenant",
@@ -48,5 +49,6 @@ __all__ = [
     "AuditLogArchive",
     "Invitation",
     "InvitationStatus",
+    "Notification",
 ]
 

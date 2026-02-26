@@ -5,6 +5,7 @@ from src.db.repositories.tenant_repo import TenantRepository
 from src.db.repositories.user_repo import UserRepository, RoleRepository
 from src.db.repositories.client_repo import ClientRepository, ClientGroupRepository
 from src.db.repositories.product_repo import ProductRepository, ProductCategoryRepository
+from src.db.repositories.notification_repo import NotificationRepository
 
 __all__ = [
     "BaseRepository",
@@ -15,4 +16,5 @@ __all__ = [
     "ClientGroupRepository",
     "ProductRepository",
     "ProductCategoryRepository",
+    "NotificationRepository",
 ]

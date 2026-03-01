@@ -17,11 +17,27 @@ from src.core.config import settings
 from src.db.session import engine
 
 
+from src.middleware.request_context import RequestContextMiddleware
+from src.db.audit_listener import register_audit_listeners
+from src.models import (
+    User, Role, Tenant, Client, ClientUser, Account, 
+    Transaction, Document, Task
+)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan handler."""
+    print("DEBUG: Lifespan startup initiated")
     # Startup
     print(f"DEBUG: Loaded CORS Origins: {settings.cors_origins}")
+
+    # Register audit listeners for key entities
+    register_audit_listeners([
+        User, Role, Tenant, Client, ClientUser, Account, 
+        Transaction, Document, Task
+    ])
+
     async with engine.begin() as connection:
         has_task_messages = await connection.run_sync(
             lambda sync_connection: inspect(sync_connection).has_table("task_messages")
@@ -65,14 +81,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-@app.middleware("http")
-async def request_context_middleware(request: Request, call_next):
-    request_id = request.headers.get("x-request-id") or str(uuid4())
-    request.state.request_id = request_id
-    response = await call_next(request)
-    response.headers["X-Request-Id"] = request_id
-    return response
+# Request Context Middleware (handles logging context and request ID)
+app.add_middleware(RequestContextMiddleware)
 
 
 # Include API routers

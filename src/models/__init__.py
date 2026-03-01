@@ -15,6 +15,7 @@ from src.models.product import Product, ProductCategory, TenantProduct
 from src.models.audit_log import AuditLog, AuditLogArchive
 from src.models.invitation import Invitation, InvitationStatus
 from src.models.notification import Notification
+from src.models.chat import ChatSession, ChatSessionMember, ChatMessage
 
 __all__ = [
     "Tenant",
@@ -50,5 +51,8 @@ __all__ = [
     "Invitation",
     "InvitationStatus",
     "Notification",
+    "ChatSession",
+    "ChatSessionMember",
+    "ChatMessage",
 ]
 

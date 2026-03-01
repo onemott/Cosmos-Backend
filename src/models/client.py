@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from src.models.module import ClientModule
     from src.models.client_user import ClientUser
     from src.models.user import User
+    from src.models.chat import ChatSession
 
 
 class ClientType(str, enum.Enum):
@@ -143,6 +144,11 @@ class Client(Base, TimestampMixin):
     )
     created_by: Mapped[Optional["User"]] = relationship(
         "User", foreign_keys=[created_by_user_id], backref="created_clients"
+    )
+
+    # Chat sessions
+    chat_sessions: Mapped[list["ChatSession"]] = relationship(
+        "ChatSession", back_populates="client", cascade="all, delete-orphan"
     )
 
     @property

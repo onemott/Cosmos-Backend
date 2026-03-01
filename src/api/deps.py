@@ -1,7 +1,7 @@
 """API dependencies for authentication and authorization."""
 
 from typing import Optional
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, status, WebSocket, Query, WebSocketException
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -522,3 +522,53 @@ def require_client_module(module_code: str):
         return current_client
 
     return check_client_module_access
+
+
+# ============================================================================
+# WebSocket Authentication Dependencies
+# ============================================================================
+
+async def get_current_ws_user(
+    websocket: WebSocket,
+    token: str = Query(...),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """
+    Authenticate WebSocket connection via token query parameter.
+    Returns user info dict.
+    """
+    import logging
+    logger = logging.getLogger("uvicorn.error")
+    
+    try:
+        payload = decode_token(token)
+        if not payload:
+            logger.error(f"WS Auth Failed: Invalid token. Token: {token[:10]}...")
+            raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid token")
+
+        # Check tenant active if present
+        if payload.tenant_id:
+            if not await check_tenant_active(db, payload.tenant_id):
+                 logger.error(f"WS Auth Failed: Tenant inactive. Tenant ID: {payload.tenant_id}")
+                 raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION, reason="Tenant inactive")
+            set_current_tenant_id(payload.tenant_id)
+
+        user_data = {
+            "user_id": payload.sub,
+            "tenant_id": payload.tenant_id,
+            "roles": payload.roles or [],
+            "user_type": payload.user_type or "user"
+        }
+        
+        # If client user, add extra info
+        if payload.user_type == "client":
+            if not payload.client_id:
+                 logger.error("WS Auth Failed: Client token missing client_id")
+                 raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid client token")
+            user_data["client_id"] = payload.client_id
+            
+        logger.info(f"WS Auth Success: {user_data['user_id']}")
+        return user_data
+    except Exception as e:
+        logger.error(f"WS Auth Error: {str(e)}")
+        raise

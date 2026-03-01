@@ -17,6 +17,7 @@ class ClientDocumentSummary(BaseModel):
     mime_type: str = Field(..., description="MIME type")
     description: Optional[str] = Field(None, description="Document description")
     created_at: datetime = Field(..., description="Upload timestamp")
+    uploaded_by_id: Optional[str] = Field(None, description="ID of the user who uploaded the document (null if uploaded by client)")
 
     class Config:
         from_attributes = True

@@ -1,11 +1,9 @@
 """Client-facing document API endpoints."""
 
 from typing import Optional
-
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status, UploadFile, File, Form
 from fastapi.responses import FileResponse, RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-
 from src.api.deps import get_current_client
 from src.db.session import get_db
 from src.models.document import DocumentType
@@ -63,10 +61,108 @@ async def list_documents(
                 mime_type=doc.mime_type,
                 description=doc.description,
                 created_at=doc.created_at,
+                uploaded_by_id=str(doc.uploaded_by_id) if doc.uploaded_by_id else None,
             )
             for doc in documents
         ],
         total_count=len(documents),
+    )
+
+
+@router.post(
+    "/upload",
+    response_model=ClientDocumentSummary,
+    status_code=status.HTTP_201_CREATED,
+    summary="Upload document",
+    description="Upload a document for the authenticated client.",
+)
+async def upload_document(
+    file: UploadFile = File(..., description="File to upload"),
+    document_type: str = Form("other", description="Document type (kyc, statement, report, contract, tax, compliance, other)"),
+    name: Optional[str] = Form(None, description="Display name (defaults to filename)"),
+    description: Optional[str] = Form(None, description="Document description"),
+    current_client: dict = Depends(get_current_client),
+    db: AsyncSession = Depends(get_db),
+) -> ClientDocumentSummary:
+    """Upload a document for the authenticated client."""
+    client_id = current_client["client_id"]
+    tenant_id = current_client["tenant_id"]
+    
+    # Parse document type
+    try:
+        doc_type_enum = DocumentType(document_type.lower())
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid document type: {document_type}. Valid types: {', '.join([t.value for t in DocumentType])}",
+        )
+    
+    # Check file size before reading into memory (prevent memory attacks)
+    if file.size and file.size > 50 * 1024 * 1024:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="File size exceeds 50MB limit",
+        )
+    
+    # Validate MIME type
+    allowed_mime_types = [
+        "application/pdf",
+        "image/jpeg",
+        "image/png",
+        "image/heic",
+        "image/gif",
+        "image/webp",
+        "application/msword",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document", # .docx
+        "application/vnd.ms-excel",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", # .xlsx
+    ]
+    
+    if file.content_type not in allowed_mime_types:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid file format. Only PDF, Images (JPEG/PNG/HEIC/GIF/WEBP), Word, and Excel files are allowed.",
+        )
+
+    # Read file content
+    file_content = await file.read()
+    
+    if not file_content:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="File is empty",
+        )
+    
+    doc_service = DocumentService(db)
+    
+    try:
+        document = await doc_service.save_client_document(
+            file_content=file_content,
+            file_name=file.filename or "document",
+            client_id=client_id,
+            tenant_id=tenant_id,
+            document_type=doc_type_enum,
+            document_name=name,
+            description=description,
+            uploaded_by_id=None, # Client uploads don't link to staff users table
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+    
+    return ClientDocumentSummary(
+        id=document.id,
+        name=document.name,
+        document_type=document.document_type.value,
+        status=document.status.value,
+        file_name=document.file_name,
+        file_size=document.file_size,
+        mime_type=document.mime_type,
+        description=document.description,
+        created_at=document.created_at,
+        uploaded_by_id=str(document.uploaded_by_id) if document.uploaded_by_id else None,
     )
 
 
@@ -103,6 +199,7 @@ async def get_document(
         mime_type=document.mime_type,
         description=document.description,
         created_at=document.created_at,
+        uploaded_by_id=document.uploaded_by_id,
     )
 
 
@@ -213,4 +310,40 @@ async def get_download_info(
             download_url=download_url,
             expires_at=expires_at,
         )
+
+
+@router.delete(
+    "/{document_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete document",
+    description="Delete a specific document. Clients can only delete documents they uploaded themselves.",
+)
+async def delete_document(
+    document_id: str,
+    current_client: dict = Depends(get_current_client),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """Delete a specific document."""
+    client_id = current_client["client_id"]
+    
+    doc_service = DocumentService(db)
+    # Verify the document belongs to the authenticated client
+    document = await doc_service.verify_client_access(document_id, client_id)
+    
+    if not document:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document not found",
+        )
+    
+
+    
+    # Security check: Only allow clients to delete documents they uploaded (uploaded_by_id is None)
+    if document.uploaded_by_id is not None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only delete documents that you uploaded yourself. Documents provided by your advisor cannot be deleted.",
+        )
+    
+    await doc_service.delete_document(document)
 

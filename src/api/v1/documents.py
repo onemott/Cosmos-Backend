@@ -137,11 +137,10 @@ async def upload_document(
     name: Optional[str] = Form(None, description="Display name (defaults to filename)"),
     description: Optional[str] = Form(None, description="Document description"),
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(get_current_tenant_admin),
+    current_user: dict = Depends(require_tenant_user),
 ) -> DocumentUploadResponse:
     """Upload a document for a client.
     
-    Requires tenant_admin role.
     Allowed file types: PDF, Word (.doc, .docx), Images (PNG, JPG, GIF, WebP)
     Maximum file size: 50MB
     """
@@ -171,6 +170,26 @@ async def upload_document(
             detail="File size exceeds 50MB limit",
         )
     
+    # Validate MIME type
+    allowed_mime_types = [
+        "application/pdf",
+        "image/jpeg",
+        "image/png",
+        "image/heic",
+        "image/gif",
+        "image/webp",
+        "application/msword",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document", # .docx
+        "application/vnd.ms-excel",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", # .xlsx
+    ]
+    
+    if file.content_type not in allowed_mime_types:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid file format. Only PDF, Images (JPEG/PNG/HEIC/GIF/WEBP), Word, and Excel files are allowed.",
+        )
+
     # Read file content
     file_content = await file.read()
     
@@ -191,7 +210,7 @@ async def upload_document(
             document_type=doc_type_enum,
             document_name=name,
             description=description,
-            uploaded_by_id=current_user.get("user_id"),
+            uploaded_by_id=current_user.get("user_id") or current_user.get("id"),
         )
     except ValueError as e:
         raise HTTPException(

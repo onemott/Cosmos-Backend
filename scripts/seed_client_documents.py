@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.db.session import async_session_factory
 from src.models.client import Client
 from src.models.client_user import ClientUser
+from src.models.user import User
 from src.models.document import Document, DocumentType, DocumentStatus
 from src.services.document_service import DocumentService
 
@@ -104,17 +105,22 @@ async def seed_documents_for_client(
     doc_service: DocumentService,
     client: Client,
     tenant_id: str,
+    staff_user_id: str = None,
 ) -> list[Document]:
     """Create test documents for a client."""
     documents = []
     client_name = client.display_name
     
-    for doc_def in SAMPLE_DOCUMENTS:
+    for i, doc_def in enumerate(SAMPLE_DOCUMENTS):
         # Create placeholder content
         content = create_placeholder_pdf(client_name, doc_def["name"])
         
+        # First 3 documents are uploaded by staff (not deletable by client)
+        # Last 3 documents are uploaded by client (deletable by client)
+        uploaded_by_id = staff_user_id if i < 3 else None
+        
         try:
-            document = await doc_service.save_document(
+            document = await doc_service.save_client_document(
                 file_content=content,
                 file_name=doc_def["file_name"],
                 client_id=client.id,
@@ -122,6 +128,7 @@ async def seed_documents_for_client(
                 document_type=doc_def["document_type"],
                 document_name=doc_def["name"],
                 description=doc_def["description"],
+                uploaded_by_id=uploaded_by_id,
             )
             documents.append(document)
         except ValueError as e:
@@ -138,6 +145,14 @@ async def main():
     
     async with async_session_factory() as db:
         doc_service = DocumentService(db)
+        
+        # Get a staff user (advisor/admin)
+        staff_user_result = await db.execute(select(User).limit(1))
+        staff_user = staff_user_result.scalar_one_or_none()
+        staff_user_id = staff_user.id if staff_user else None
+        
+        if not staff_user_id:
+            print("\nWarning: No staff user found. All documents will be deletable by client.")
         
         # Get all client users (created by portfolio seed script)
         result = await db.execute(select(ClientUser))
@@ -170,7 +185,7 @@ async def main():
                 continue
             
             documents = await seed_documents_for_client(
-                db, doc_service, client, client_user.tenant_id
+                db, doc_service, client, client_user.tenant_id, staff_user_id
             )
             print(f"  Created {len(documents)} documents:")
             

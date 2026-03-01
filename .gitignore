@@ -41,9 +41,12 @@ wheels/
 # Logs
 *.log
 server.log
+celerybeat.pid
 
 # Testing
 .coverage
+.coverage.*
+coverage.xml
 htmlcov/
 .pytest_cache/
 .tox/
@@ -59,6 +62,14 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db
+ehthumbs.db
+Desktop.ini
 
 # Local document storage (test files)
 storage/
+
+# Celery
+celerybeat-schedule
+
+# Jupyter Notebook
+.ipynb_checkpoints

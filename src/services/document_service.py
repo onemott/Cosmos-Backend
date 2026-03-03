@@ -9,7 +9,7 @@ from typing import Optional
 from uuid import uuid4
 import mimetypes
 
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.document import Document, DocumentType, DocumentStatus
@@ -266,20 +266,36 @@ class DocumentService:
         self,
         client_id: str,
         document_type: Optional[DocumentType] = None,
-    ) -> list[Document]:
-        """Get all documents for a client."""
-        query = select(Document).where(
+        search_query: Optional[str] = None,
+        skip: int = 0,
+        limit: int = 20,
+    ) -> tuple[list[Document], int]:
+        """Get all documents for a client with pagination."""
+        base_query = select(Document).where(
             Document.client_id == client_id,
             Document.product_id.is_(None),  # Only client documents
         )
         
         if document_type:
-            query = query.where(Document.document_type == document_type)
+            base_query = base_query.where(Document.document_type == document_type)
+
+        if search_query:
+            search_filter = f"%{search_query}%"
+            base_query = base_query.where(
+                (Document.name.ilike(search_filter)) | 
+                (Document.description.ilike(search_filter))
+            )
         
-        query = query.order_by(Document.created_at.desc())
+        # Count query
+        count_query = select(func.count()).select_from(base_query.subquery())
+        count_result = await self.db.execute(count_query)
+        total_count = count_result.scalar_one()
+
+        # Data query with pagination
+        query = base_query.order_by(Document.created_at.desc()).offset(skip).limit(limit)
         
         result = await self.db.execute(query)
-        return list(result.scalars().all())
+        return list(result.scalars().all()), total_count
     
     async def get_product_documents(
         self,

@@ -95,17 +95,17 @@ async def list_documents(
     
     if client_id:
         # Get documents for specific client
-        documents = await doc_service.get_client_documents(
+        documents, total_count = await doc_service.get_client_documents(
             client_id=client_id,
             document_type=doc_type_enum,
+            skip=skip,
+            limit=limit,
         )
     else:
         # For now, require client_id filter
         # TODO: Add method to get all tenant documents
         documents = []
-    
-    # Apply pagination
-    paginated = documents[skip:skip + limit]
+        total_count = 0
     
     return AdminDocumentList(
         documents=[
@@ -123,9 +123,9 @@ async def list_documents(
                 client_id=doc.client_id,
                 product_id=doc.product_id,
             )
-            for doc in paginated
+            for doc in documents
         ],
-        total_count=len(documents),
+        total_count=total_count,
     )
 
 

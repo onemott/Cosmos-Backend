@@ -68,7 +68,7 @@ def build_task_summary(task: Task, client: Optional[Client] = None, assigned_use
     
     assigned_name = None
     if assigned_user:
-        assigned_name = assigned_user.display_name or assigned_user.email
+        assigned_name = assigned_user.full_name or assigned_user.email
     
     return TaskSummary(
         id=task.id,
@@ -109,7 +109,7 @@ def build_task_response(
         assigned_to_summary = UserSummary(
             id=assigned_user.id,
             email=assigned_user.email,
-            display_name=assigned_user.display_name,
+            display_name=assigned_user.full_name,
         )
     
     created_by_summary = None
@@ -117,7 +117,7 @@ def build_task_response(
         created_by_summary = UserSummary(
             id=created_user.id,
             email=created_user.email,
-            display_name=created_user.display_name,
+            display_name=created_user.full_name,
         )
     
     return TaskResponse(
@@ -205,7 +205,7 @@ async def build_task_message_responses(
         if message.author_type == TaskMessageAuthorType.EAM and message.author_user_id:
             user = users_map.get(str(message.author_user_id))
             if user:
-                author_name = user.display_name or user.email
+                author_name = user.full_name or user.email
         elif message.author_type == TaskMessageAuthorType.CLIENT and message.author_client_user_id:
             client_user = client_users_map.get(str(message.author_client_user_id))
             if client_user:

@@ -1,13 +1,14 @@
 """Client-facing document API endpoints."""
 
-from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, status, UploadFile, File, Form
+from typing import Optional, List
+from fastapi import APIRouter, Depends, HTTPException, Query, status, UploadFile, File, Form, Request
 from fastapi.responses import FileResponse, RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.api.deps import get_current_client
 from src.db.session import get_db
 from src.models.document import DocumentType
 from src.services.document_service import DocumentService
+from src.services.audit_log_service import enqueue_audit_log
 from src.schemas.client_document import (
     ClientDocumentSummary,
     ClientDocumentList,
@@ -27,6 +28,9 @@ async def list_documents(
     current_client: dict = Depends(get_current_client),
     db: AsyncSession = Depends(get_db),
     document_type: Optional[str] = Query(None, description="Filter by document type"),
+    search: Optional[str] = Query(None, description="Search by name or description"),
+    skip: int = Query(0, ge=0, description="Skip N documents"),
+    limit: int = Query(20, ge=1, le=100, description="Limit documents per page"),
 ) -> ClientDocumentList:
     """List all documents for the authenticated client."""
     client_id = current_client["client_id"]
@@ -44,9 +48,12 @@ async def list_documents(
                 detail=f"Invalid document type: {document_type}",
             )
     
-    documents = await doc_service.get_client_documents(
+    documents, total_count = await doc_service.get_client_documents(
         client_id=client_id,
         document_type=doc_type_enum,
+        search_query=search,
+        skip=skip,
+        limit=limit,
     )
     
     return ClientDocumentList(
@@ -65,7 +72,7 @@ async def list_documents(
             )
             for doc in documents
         ],
-        total_count=len(documents),
+        total_count=total_count,
     )
 
 
@@ -220,6 +227,7 @@ async def get_document(
 )
 async def download_document(
     document_id: str,
+    request: Request,
     current_client: dict = Depends(get_current_client),
     db: AsyncSession = Depends(get_db),
 ):
@@ -238,6 +246,22 @@ async def download_document(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Document not found",
         )
+    
+    # Audit log
+    enqueue_audit_log({
+        "tenant_id": current_client["tenant_id"],
+        "event_type": "document_download",
+        "level": "info",
+        "category": "security",
+        "resource_type": "document",
+        "resource_id": document_id,
+        "action": "download",
+        "user_id": client_id,
+        "user_email": current_client.get("email"),
+        "ip_address": request.client.host if request.client else None,
+        "user_agent": request.headers.get("user-agent"),
+        "extra_data": {"file_name": document.file_name},
+    })
     
     # Check if using local storage
     file_path = doc_service.get_file_path(document)
@@ -263,6 +287,7 @@ async def download_document(
 )
 async def get_download_info(
     document_id: str,
+    request: Request,
     current_client: dict = Depends(get_current_client),
     db: AsyncSession = Depends(get_db),
 ) -> DocumentDownloadResponse:
@@ -281,6 +306,22 @@ async def get_download_info(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Document not found",
         )
+    
+    # Audit log - record intention to download
+    enqueue_audit_log({
+        "tenant_id": current_client["tenant_id"],
+        "event_type": "document_download_request",
+        "level": "info",
+        "category": "security",
+        "resource_type": "document",
+        "resource_id": document_id,
+        "action": "request_download_info",
+        "user_id": client_id,
+        "user_email": current_client.get("email"),
+        "ip_address": request.client.host if request.client else None,
+        "user_agent": request.headers.get("user-agent"),
+        "extra_data": {"file_name": document.file_name},
+    })
     
     # Check storage type
     file_path = doc_service.get_file_path(document)
